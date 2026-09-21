@@ -1,0 +1,158 @@
+/* ==========================================================================
+   Barevný systém „Anodized" (podklady/flowlogis-barvy-analyza.md)
+   Vrstva 1 – primitivy (nepoužívat přímo v komponentách)
+   Vrstva 2 – sémantické role (mění se podle data-theme; používají komponenty)
+   Vrstva 3 – komponentní tokeny (jen kde role nestačí)
+   ========================================================================== */
+
+:root {
+  /* ── Vrstva 1: primitivy ── */
+  --graphite-25: #FAFAF7;
+  --graphite-50: #F5F5F1;
+  --graphite-100: #E9E9E2;
+  --graphite-200: #D4D4CB;
+  --graphite-300: #B3B3A9;
+  --graphite-400: #8C8C84;
+  --graphite-500: #6E6E66;
+  --graphite-600: #56564F;
+  --graphite-700: #3F3F3A;
+  --graphite-800: #2E2E2B;
+  --graphite-850: #262624;
+  --graphite-900: #1F1F1E;
+  --graphite-950: #171716;
+  --graphite-1000: #0F0F0E;
+
+  --azure-50: #E6F5FD;
+  --azure-100: #C2E8FB;
+  --azure-200: #8FD5F7;
+  --azure-300: #4FBDF2;
+  --azure-400: #1BADF0;
+  --azure-500: #00A3EE;
+  --azure-600: #0086C7;
+  --azure-700: #0A6CA6;
+  --azure-800: #0B5480;
+  --azure-900: #0C3D5C;
+
+  /* Radius podle hierarchie */
+  --r-input: 5px;
+  --r-btn: 9px;
+  --r-panel: 12px;
+  --r-modal: 16px;
+
+  /* Identita modulu (Simulátor výrobní linky = Teal) – jen tečka u názvu */
+  --module-accent: #14B8A6;
+}
+
+/* ── Vrstva 2: DARK (výchozí) ── */
+:root,
+[data-theme="dark"] {
+  --canvas: var(--graphite-950);
+  --surface-1: var(--graphite-900);
+  --surface-2: var(--graphite-850);
+  --surface-3: var(--graphite-800);
+  --surface-overlay: var(--graphite-850);
+
+  --border: var(--graphite-700);
+  --border-strong: var(--graphite-600);
+  --border-subtle: var(--graphite-800);
+
+  --text-primary: var(--graphite-50);
+  --text-secondary: var(--graphite-300);
+  --text-muted: var(--graphite-400);
+  --text-disabled: var(--graphite-500);
+
+  --accent: var(--azure-500);
+  --accent-solid: var(--azure-500);
+  --accent-hover: var(--azure-300);
+  --accent-ink: var(--graphite-1000);
+  --accent-bg: #0C2432;
+  --focus-ring: var(--azure-300);
+
+  --grid-minor: #262624;
+  --grid-major: #33332F;
+
+  /* Andon – text/ikona, plocha, tint */
+  --success: #4FD18A;   --success-fill: #1E9E5A;   --success-bg: #14291E;
+  --warning: #F5B93D;   --warning-fill: #D9911F;   --warning-bg: #2C2313;
+  --critical: #FF7A6B;  --critical-fill: #E04B3C; --critical-bg: #2E1A17;
+  --info: #4FBDF2;      --info-fill: #00A3EE;      --info-bg: #0C2432;
+  --idle: #8C8C84;      --idle-fill: #56564F;      --idle-bg: #262624;
+  --on-fill: #FFFFFF;
+
+  /* Kategoriální paleta (typy prvků, toky) */
+  --cat-1: #00A3EE;
+  --cat-2: #14B8A6;
+  --cat-3: #7A73F0;
+  --cat-4: #B36AE2;
+  --cat-5: #E052A0;
+  --cat-6: #D9A441;
+  --cat-7: #5B87B8;
+  --cat-8: #8FAE7B;
+
+  --shadow-float: none;
+  --scrim: rgba(0, 0, 0, .5);
+
+  /* ── Vrstva 3: komponentní ── */
+  --grid-dot: var(--grid-major);
+  --edge: var(--azure-700);
+  --edge-inactive: var(--text-disabled);
+  --shape-a: 22%;   /* krytí výplně pozadí */
+  --shape-b: 50%;   /* krytí okraje pozadí */
+
+  color-scheme: dark;
+}
+
+/* ── Vrstva 2: LIGHT ── */
+[data-theme="light"] {
+  --canvas: var(--graphite-25);
+  --surface-1: #FFFFFF;
+  --surface-2: var(--graphite-50);
+  --surface-3: var(--graphite-100);
+  --surface-overlay: #FFFFFF;
+
+  --border: var(--graphite-200);
+  --border-strong: var(--graphite-300);
+  --border-subtle: var(--graphite-100);
+
+  --text-primary: var(--graphite-900);
+  --text-secondary: var(--graphite-600);
+  --text-muted: var(--graphite-500);
+  --text-disabled: var(--graphite-400);
+
+  --accent: var(--azure-700);          /* akcent jako TEXT */
+  --accent-solid: var(--azure-500);    /* akcent jako PLOCHA */
+  --accent-hover: var(--azure-600);
+  --accent-ink: var(--graphite-1000);
+  --accent-bg: var(--azure-50);
+  --focus-ring: var(--azure-700);
+
+  --grid-minor: var(--graphite-100);
+  --grid-major: var(--graphite-200);
+
+  --success: #157A46;   --success-fill: #1E9E5A;   --success-bg: #E3F6EB;
+  --warning: #9C5F0B;   --warning-fill: #D9911F;   --warning-bg: #FBF0DC;
+  --critical: #C1362B;  --critical-fill: #E04B3C; --critical-bg: #FBE7E4;
+  --info: #0A6CA6;      --info-fill: #00A3EE;      --info-bg: #E6F5FD;
+  --idle: #6E6E66;      --idle-fill: #8C8C84;      --idle-bg: #F5F5F1;
+
+  /* Kategoriální – ztmaveno o ~12 % pro světlé pozadí */
+  --cat-1: #008FD1;
+  --cat-2: #12A292;
+  --cat-3: #6B65D3;
+  --cat-4: #9E5DC7;
+  --cat-5: #C5488D;
+  --cat-6: #BF9039;
+  --cat-7: #5077A2;
+  --cat-8: #7E996C;
+
+  --shadow-float: 0 4px 16px rgba(31, 31, 30, .10), 0 1px 2px rgba(31, 31, 30, .06);
+  --scrim: rgba(31, 31, 30, .25);
+
+  --grid-dot: var(--grid-major);
+  --edge: var(--azure-300);
+  --edge-inactive: var(--text-disabled);
+  --shape-a: 45%;
+  --shape-b: 75%;
+
+  color-scheme: light;
+}
