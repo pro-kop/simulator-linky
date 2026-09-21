@@ -63,6 +63,7 @@ const FIELDS = {
   warehouse: [
     F_NAME,
     { key: 'capacity', label: 'Kapacita skladu', unit: 'obalů', kind: 'num', min: 1, max: 1e5, int: true },
+    { key: 'refCap', label: 'Kapacita pro reference', kind: 'refcaps', maxItems: 8, max: 60, min: 1, capMax: 1e5 },
   ],
   textnode: [
     { key: 'content', label: 'Obsah', kind: 'textarea', max: 5000 },
@@ -80,7 +81,7 @@ function defaultParams(type) {
     case 'kompletace': return { name: 'Kompletace', shiftH: 12, shiftsWeek: 10, oee: 85, takt: 45, nasob: 3, kapRelevant: false, kusovnik: 1 };
     case 'packing':    return { name: 'Obal', capacity: 350, count: 10, kusovnik: 1 };
     case 'tempering':  return { name: 'Temperace', hoursMin: 6, maxObals: 20, kusovnik: 1 };
-    case 'warehouse':  return { name: 'Sklad', capacity: 50 };
+    case 'warehouse':  return { name: 'Sklad', capacity: 50, refCap: { on: false, list: [] } };
     case 'textnode':   return { content: '', fontSize: 14, color: '', bgColor: '', bold: false, italic: false };
   }
   throw new Error('Neznámý typ prvku');
@@ -108,6 +109,23 @@ function sanitizeParams(type, raw) {
         break;
       case 'color':
         out[f.key] = isHexColor(v) ? v : '';
+        break;
+      case 'refcaps':
+        // { on, list: [{ name, cap }] } – vlastní kapacita skladu pro vybrané reference
+        if (v && typeof v === 'object') {
+          const list = Array.isArray(v.list) ? v.list : [];
+          const seen = new Set();
+          out[f.key] = {
+            on: v.on === true,
+            list: list.map((r) => {
+              if (!r || typeof r !== 'object' || (typeof r.name !== 'string' && typeof r.name !== 'number')) return null;
+              const name = String(r.name).trim().slice(0, f.max), cap = Number(r.cap);
+              if (!name || seen.has(name) || !Number.isFinite(cap)) return null;
+              seen.add(name);
+              return { name, cap: clamp(Math.round(cap), f.min, f.capMax) };
+            }).filter(Boolean).slice(0, f.maxItems),
+          };
+        }
         break;
       case 'refs':
         // Nový formát [{name, share}]; starší export měl jen pole názvů.
@@ -146,6 +164,9 @@ function refLabel(refs) {
   return refShares(refs).map((r) => r.name + ' ' + Math.round(r.w * 100) + ' %').join(' · ');
 }
 const REF_NONE = '';
+// Všechny reference definované na strojích v modelu (pro nabídku u skladu).
+const knownRefs = () => [...new Set(S.nodes.flatMap((n) => (n.type === 'machine' && n.params.refs ? n.params.refs.map((r) => r.name) : [])))]
+  .sort((a, b) => a.localeCompare(b, 'cs'));
 const refName = (r) => (r === REF_NONE ? 'bez reference' : r);
 // Stálá barva reference (kategoriální paleta, přidělená v pořadí, jak se reference objeví).
 const REF_COLORS = new Map();
@@ -165,6 +186,7 @@ const S = {
     connect: false, csrc: null,       // režim spojů, vybraný zdroj
     draw: null, drawColor: PASTELS[0].hex,
     selShape: null, drag: null,
+    statsOpen: false,
     mouse: { x: 0, y: 0 },
   },
 };

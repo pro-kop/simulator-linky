@@ -3,6 +3,7 @@
 
 refreshColors();
 bindUI();
+initStats();
 resizeCanvases();
 applyTransform();
 loadDemo();

@@ -141,6 +141,31 @@ function fillPacking(pack, n, ref) {
   return placed;
 }
 
+// Kapacita skladu pro danou referenci: { cap, used }.
+// Bez „Kapacity pro reference" je jedna společná kapacita; se zapnutou má každá vypsaná reference
+// vlastní limit a ostatní reference (i bez reference) sdílí obecnou kapacitu skladu.
+function whSlot(w, ref) {
+  const rc = w.params.refCap, items = w.rt.items;
+  if (!rc || !rc.on) return { cap: w.params.capacity, used: items.length };
+  const e = rc.list.find((x) => x.name === ref);
+  if (e) return { cap: e.cap, used: items.filter((i) => i.ref === ref).length };
+  const listed = new Set(rc.list.map((x) => x.name));
+  return { cap: w.params.capacity, used: items.filter((i) => !listed.has(i.ref)).length };
+}
+function whTotalCap(w) {
+  const rc = w.params.refCap;
+  return w.params.capacity + (rc && rc.on ? rc.list.reduce((s, e) => s + e.cap, 0) : 0);
+}
+// Které části skladu jsou plné (názvy referencí, případně „ostatní").
+function whFullParts(w) {
+  const rc = w.params.refCap;
+  if (!rc || !rc.on) return w.rt.items.length >= w.params.capacity ? ['vše'] : [];
+  const out = rc.list.filter((e) => whSlot(w, e.name).used >= e.cap).map((e) => e.name);
+  const listed = new Set(rc.list.map((x) => x.name));
+  if (w.rt.items.filter((i) => !listed.has(i.ref)).length >= w.params.capacity) out.push('ostatní');
+  return out;
+}
+
 // Předá obal/dávku (item) prvku t. Vrací true, pokud byl item celý předán.
 function sendPack(t, item) {
   switch (t.type) {
@@ -164,7 +189,8 @@ function sendPack(t, item) {
       wake(t);
       return true;
     case 'warehouse': {
-      if (t.rt.items.length >= t.params.capacity) return false;
+      const slot = whSlot(t, item.ref);
+      if (slot.used >= slot.cap) return false;      // plno (celkově nebo pro tuto referenci) → čeká
       const it = copyItem(item);
       moveObal(it, 'wh');
       t.rt.items.push(it);
@@ -194,8 +220,16 @@ function flushPack(pack) {
     let sent = false;
     for (const t of rotated(targets, pr.rr)) {
       if (!pr.waiting.length) break;
-      const item = { pcs: cap, cap, packNodeId: pack.id, loc: null, ref: pr.waiting[0] };
-      if (sendPack(t, item)) { pr.waiting.shift(); sent = true; spawnDot(pack, t); }
+      // Když první obal v řadě nemá kam (např. plná kapacita jeho reference ve skladu),
+      // pustí se obal jiné reference.
+      const tried = new Set();
+      for (let i = 0; i < pr.waiting.length; i++) {
+        const ref = pr.waiting[i];
+        if (tried.has(ref)) continue;
+        tried.add(ref);
+        const item = { pcs: cap, cap, packNodeId: pack.id, loc: null, ref };
+        if (sendPack(t, item)) { pr.waiting.splice(i, 1); sent = true; spawnDot(pack, t); break; }
+      }
     }
     pr.rr = (pr.rr + 1) % targets.length;
     if (!sent) break;
@@ -472,12 +506,13 @@ function updateUI() {
       else if (rt.occ >= mx) { st = 'full'; label = 'plná'; }
       else if (rt.occ > 0) st = 'run';
     } else if (n.type === 'warehouse') {
-      const cap = n.params.capacity, cnt = rt.items.length;
+      const cap = whTotalCap(n), cnt = rt.items.length, full = whFullParts(n);
       const pcs = rt.items.reduce((s, i) => s + i.pcs, 0);
       main = fmt(cnt) + ' / ' + fmt(cap) + ' obalů';
       sec = 'obsah: ' + fmt(pcs) + ' ks | výdej: ' + fmt(rt.outTotal);
       pct = cnt / cap;
       if (cnt >= cap) { st = 'full'; label = 'plný'; }
+      else if (full.length) { st = 'full'; label = 'plno: ' + full.join(', '); }
       else if (cnt > 0) { st = 'run'; label = 'zásoba'; }
       else label = 'prázdný';
     }
@@ -508,7 +543,7 @@ function updateUI() {
 
 // ── Statistika výkonu (kapacitně relevantní prvky ★) ──
 // Kapacita prvku:  R = 3600 / takt × násobnost × OEE/100   [ks/hod]
-// Celkem:          ΣR; směna = ×12; 24 h = ×24; N dnů = ×24×N; takt linky = 3600 / ΣR [s/ks]
+// Celkem:          ΣR; směna = ×12; 24 h = ×24; N dnů = ×24×N
 // Po referencích:  kapacita každého ★ prvku se rozdělí podle skutečného mixu referencí,
 //                  který ten prvek v simulaci vyrobil (R × vyrobeno_ref / vyrobeno_celkem).
 // Neaktivní prvky se nezapočítávají.
@@ -534,31 +569,41 @@ const STAT_COLS = [
   { label: 'Ks / 5 dnů', f: (r) => fmt(r * 24 * 5) },
   { label: 'Ks / 6 dnů', f: (r) => fmt(r * 24 * 6) },
   { label: 'Ks / 7 dnů', f: (r) => fmt(r * 24 * 7) },
-  { label: 'Takt linky (s/ks)', f: (r) => (r > 0 ? fmtNum(Math.round(3600 / r * 10) / 10) : '—') },
 ];
 
-function statRow(cls, head, rate) {
-  return h('tr', { class: cls }, [
-    h('th', { scope: 'row' }, head),
-    ...STAT_COLS.map((c) => h('td', { text: rate == null ? '—' : c.f(rate) })),
-  ]);
+// Hlavička a řádek součtu se postaví jednou (tlačítko rozpadu se nepřekresluje každý tick);
+// řádky referencí se přestavují a jsou vidět jen po rozkliknutí.
+let statTotalCells = [];
+function initStats() {
+  $('statHead').replaceChildren(h('tr', {}, [h('th', { text: '' }), ...STAT_COLS.map((c) => h('th', { scope: 'col', text: c.label }))]));
+  statTotalCells = STAT_COLS.map(() => h('td', { text: '—' }));
+  const tog = h('button', { type: 'button', id: 'statToggle', class: 'st-tog', hidden: true, 'aria-expanded': 'false', 'aria-controls': 'statRefs', title: 'Zobrazit / skrýt rozpad podle reference' });
+  $('statTotal').replaceChildren(h('th', { scope: 'row' }, [h('span', { id: 'statTotalLbl', text: 'Výkon (★ kap.)' }), tog]), ...statTotalCells);
+  tog.addEventListener('click', () => {
+    S.ui.statsOpen = !S.ui.statsOpen;
+    updateStats();
+  });
 }
 
 // st = výsledek calcStats() nebo null (prázdná tabulka)
 function renderStats(st) {
-  $('statHead').replaceChildren(h('tr', {}, [h('th', { text: '' }), ...STAT_COLS.map((c) => h('th', { scope: 'col', text: c.label }))]));
-  const rows = [];
-  if (st && st.byRef) {
-    const refs = [...st.byRef.keys()].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
-    refs.forEach((ref) => {
-      const dot = h('i', { class: 'rdot' });
-      dot.style.background = refColor(ref);
-      rows.push(statRow('ref', [dot, refName(ref)], st.byRef.get(ref)));
-    });
-  }
-  const totalHead = st && st.byRef ? 'Celkem' : 'Výkon (★ kap.)';
-  rows.push(statRow('total', totalHead, st ? st.total : null));
-  $('statBody').replaceChildren(...rows);
+  statTotalCells.forEach((td, i) => { td.textContent = st ? STAT_COLS[i].f(st.total) : '—'; });
+  const hasRefs = !!(st && st.byRef), open = hasRefs && S.ui.statsOpen;
+  const tog = $('statToggle');
+  tog.hidden = !hasRefs;
+  tog.setAttribute('aria-expanded', String(open));
+  tog.textContent = (open ? '▾' : '▸') + ' Podle reference';
+  $('statTotalLbl').textContent = hasRefs ? 'Celkem' : 'Výkon (★ kap.)';
+  const body = $('statRefs');
+  body.hidden = !open;
+  if (!open) { body.replaceChildren(); return; }
+  const refs = [...st.byRef.keys()].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
+  body.replaceChildren(...refs.map((ref) => {
+    const dot = h('i', { class: 'rdot' });
+    dot.style.background = refColor(ref);
+    const rate = st.byRef.get(ref);
+    return h('tr', { class: 'ref' }, [h('th', { scope: 'row' }, [dot, refName(ref)]), ...STAT_COLS.map((c) => h('td', { text: c.f(rate) }))]);
+  }));
 }
 
 function updateStats() { renderStats(calcStats()); }
@@ -576,11 +621,14 @@ function updateWarnings(producers) {
   const blocked = producers.find((n) => n.rt.blocked);
   const queue = act.find((n) => isMT(n) && !isProducer(n) && n.rt.packQueue.length > 10);
   const tFull = act.find((n) => n.type === 'tempering' && n.rt.occ >= n.params.maxObals);
-  const wFull = act.find((n) => n.type === 'warehouse' && n.rt.items.length >= n.params.capacity);
+  const wFull = act.find((n) => n.type === 'warehouse' && whFullParts(n).length);
   if (blocked) showWarning('⚠ ' + blocked.params.name + ' zablokován – navazující prvky nepřijímají (obaly / sklad / temperace)', 'crit');
   else if (queue) showWarning('⚠ Fronta u ' + queue.params.name + ' roste', 'warn');
   else if (tFull) showWarning('⚠ ' + tFull.params.name + ' je plná', 'warn');
-  else if (wFull) showWarning('⚠ ' + wFull.params.name + ' je plný', 'warn');
+  else if (wFull) {
+    const parts = whFullParts(wFull);
+    showWarning('⚠ ' + wFull.params.name + (parts[0] === 'vše' ? ' je plný' : ': plná kapacita – ' + parts.join(', ')), 'warn');
+  }
   else showWarning(null);
 }
 

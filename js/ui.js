@@ -232,6 +232,59 @@ function fieldRow(f, value) {
       read = () => ({ value: none.checked ? '' : col.value });
       break;
     }
+    case 'refcaps': {
+      // Zaškrtnutím se zapne vlastní kapacita pro vybrané reference; ostatní sdílí obecnou kapacitu.
+      const v = value || { on: false, list: [] };
+      const on = h('input', { type: 'checkbox', id });
+      on.checked = !!v.on;
+      const dl = h('datalist', { id: id + '-names' }, knownRefs().map((r) => h('option', { value: r })));
+      const list = h('div', { class: 'refs' });
+      const rows = [];
+      const lastFilled = () => { const r = rows[rows.length - 1]; return !r || r.name.value.trim() !== ''; };
+      const add = (r) => {
+        const i = rows.length + 1;
+        const name = h('input', { type: 'text', maxlength: f.max, autocomplete: 'off', list: id + '-names', placeholder: 'Reference ' + i, 'aria-label': 'Reference ' + i });
+        const cap = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'obalů', 'aria-label': 'Kapacita reference ' + i + ' v obalech' });
+        name.value = (r && r.name) || '';
+        cap.value = r && r.cap != null ? String(r.cap) : '';
+        name.addEventListener('input', () => { if (lastFilled() && rows.length < f.maxItems) add(null); });
+        rows.push({ name, cap });
+        list.append(h('div', { class: 'ref-row' }, [name, cap]));
+      };
+      v.list.forEach(add);
+      const detail = h('div', { class: 'refcap-detail' }, [
+        list, dl,
+        h('div', { class: 'pf-note', text: 'Plná kapacita reference zastaví jen tuto referenci. Ostatní reference (i bez reference) sdílí Kapacitu skladu výše.' }),
+      ]);
+      const sync = () => {
+        detail.hidden = !on.checked;
+        if (on.checked && !rows.length) knownRefs().slice(0, f.maxItems).forEach((n) => add({ name: n }));
+        if (rows.length < f.maxItems && lastFilled()) add(null);
+      };
+      on.addEventListener('change', sync);
+      sync();
+      control = h('div', {}, [h('label', { class: 'pf-check' }, [on, f.label]), detail]);
+      read = () => {
+        const out = [], seen = new Set();
+        for (const r of rows) {
+          const nm = r.name.value.trim().slice(0, f.max);
+          if (!nm) continue;
+          if (seen.has(nm)) return { error: 'Reference „' + nm + '“ je uvedena dvakrát.' };
+          seen.add(nm);
+          const c = Number(r.cap.value.trim());
+          if (!on.checked && r.cap.value.trim() === '') continue;
+          if (!Number.isInteger(c) || c < f.min || c > f.capMax) return { error: 'Kapacitu reference „' + nm + '“ zadejte jako celé číslo 1 – ' + fmtNum(f.capMax) + ' obalů.' };
+          out.push({ name: nm, cap: c });
+        }
+        if (on.checked && !out.length) return { error: 'Zadejte alespoň jednu referenci s kapacitou, nebo volbu vypněte.' };
+        return { value: { on: on.checked, list: out } };
+      };
+      const row = h('div', { class: 'pf' }, [control, err]);
+      return {
+        el: row, key: f.key,
+        read: () => { const r = read(); err.textContent = r.error || ''; row.classList.toggle('err', !!r.error); return r; },
+      };
+    }
     case 'refs': {
       // Řádek = název reference + podíl v %. Prázdný podíl = rovným dílem ze zbytku do 100 %.
       const list = h('div', { class: 'refs', id });

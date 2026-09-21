@@ -301,7 +301,13 @@ button { cursor: pointer; }
 }
 .stt td { text-align: right; font-size: 13px; font-weight: 600; padding: 5px 10px; white-space: nowrap; }
 .stt tr.ref td { color: var(--text-secondary); }
-.stt tr.ref + tr.total th, .stt tr.ref + tr.total td { border-top: 1px solid var(--border); }
+.stt tbody:not([hidden]) + tfoot tr.total > * { border-top: 1px solid var(--border); }
+.st-tog {
+  margin-left: 10px; padding: 2px 8px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-input);
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+}
+.st-tog:hover, .st-tog[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .stt tr.total td { font-size: 15px; font-weight: 700; color: var(--text-primary); letter-spacing: -.01em; }
 .stt tr.total th { color: var(--text-primary); font-weight: 700; }
 .rdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 0; }
@@ -396,6 +402,7 @@ button { cursor: pointer; }
 .pf-color-row .pf-check { padding: 6px 8px; white-space: nowrap; }
 .refs { display: flex; flex-direction: column; gap: 5px; }
 .ref-row { display: grid; grid-template-columns: 1fr 72px; gap: 5px; }
+.refcap-detail { margin-top: 6px; }
 .pf-note { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .pbtns { display: flex; gap: 8px; margin-top: 16px; }

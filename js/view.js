@@ -348,13 +348,25 @@ function tooltipContent(n) {
     const c = countBy(rt.queue, (i) => i.ref);
     for (const ref of sortRefs(c.keys())) out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů', c.get(ref) / p.maxObals, refColor(ref)));
   } else if (n.type === 'warehouse') {
-    out.push(h('div', { class: 'tt-sub', text: 'kapacita ' + fmt(p.capacity) + ' obalů · vydáno ' + fmt(rt.outTotal) }));
+    const rc = p.refCap, perRef = rc && rc.on;
+    out.push(h('div', { class: 'tt-sub', text: 'kapacita ' + fmt(whTotalCap(n)) + ' obalů' + (perRef ? ' (po referencích)' : '') + ' · vydáno ' + fmt(rt.outTotal) }));
     out.push(ttSec('Obsah'));
-    if (!rt.items.length) out.push(ttEmpty('prázdný'));
     const c = countBy(rt.items, (i) => i.ref);
-    for (const ref of sortRefs(c.keys())) {
-      const pcs = rt.items.filter((i) => i.ref === ref).reduce((s, i) => s + i.pcs, 0);
-      out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů · ' + fmt(pcs) + ' ks', c.get(ref) / p.capacity, refColor(ref)));
+    const pcsOf = (pred) => rt.items.filter(pred).reduce((s, i) => s + i.pcs, 0);
+    if (perRef) {
+      // každá vypsaná reference se svým limitem + společná část pro ostatní
+      for (const e of rc.list) {
+        const k = c.get(e.name) || 0;
+        out.push(ttRow(ttRef(e.name), k + ' / ' + fmt(e.cap) + ' obalů · ' + fmt(pcsOf((i) => i.ref === e.name)) + ' ks', k / e.cap, refColor(e.name)));
+      }
+      const listed = new Set(rc.list.map((e) => e.name));
+      const others = rt.items.filter((i) => !listed.has(i.ref)).length;
+      out.push(ttRow('Ostatní', others + ' / ' + fmt(p.capacity) + ' obalů · ' + fmt(pcsOf((i) => !listed.has(i.ref))) + ' ks', others / p.capacity));
+    } else {
+      if (!rt.items.length) out.push(ttEmpty('prázdný'));
+      for (const ref of sortRefs(c.keys())) {
+        out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů · ' + fmt(pcsOf((i) => i.ref === ref)) + ' ks', c.get(ref) / p.capacity, refColor(ref)));
+      }
     }
   } else {
     return null;
