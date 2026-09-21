@@ -57,12 +57,13 @@ const FIELDS = {
   tempering: [
     F_NAME,
     { key: 'hoursMin', label: 'Doba temperace', unit: 'hod', kind: 'num', min: 0, max: 1000 },
-    { key: 'maxObals', label: 'Max. kapacita', unit: 'obalů', kind: 'num', min: 1, max: 1e5, int: true },
+    { key: 'maxObals', label: 'Max. kapacita', unit: 'obalů', kind: 'num', min: 0, max: 1e5, int: true, minOff: 1 },
     F_KUS,
+    { key: 'refCap', label: 'Kapacita pro reference', kind: 'refcaps', maxItems: 8, max: 60, min: 1, capMax: 1e5 },
   ],
   warehouse: [
     F_NAME,
-    { key: 'capacity', label: 'Kapacita skladu', unit: 'obalů', kind: 'num', min: 1, max: 1e5, int: true },
+    { key: 'capacity', label: 'Kapacita skladu', unit: 'obalů', kind: 'num', min: 0, max: 1e5, int: true, minOff: 1 },
     { key: 'refCap', label: 'Kapacita pro reference', kind: 'refcaps', maxItems: 8, max: 60, min: 1, capMax: 1e5 },
   ],
   textnode: [
@@ -80,7 +81,7 @@ function defaultParams(type) {
     case 'machine':    return { name: 'Stroj', refs: [], shiftH: 12, shiftsWeek: 10, oee: 85, takt: 40, nasob: 6, kapRelevant: false, kusovnik: 1 };
     case 'kompletace': return { name: 'Kompletace', shiftH: 12, shiftsWeek: 10, oee: 85, takt: 45, nasob: 3, kapRelevant: false, kusovnik: 1 };
     case 'packing':    return { name: 'Obal', capacity: 350, count: 10, kusovnik: 1 };
-    case 'tempering':  return { name: 'Temperace', hoursMin: 6, maxObals: 20, kusovnik: 1 };
+    case 'tempering':  return { name: 'Temperace', hoursMin: 6, maxObals: 20, kusovnik: 1, refCap: { on: false, list: [] } };
     case 'warehouse':  return { name: 'Sklad', capacity: 50, refCap: { on: false, list: [] } };
     case 'textnode':   return { content: '', fontSize: 14, color: '', bgColor: '', bold: false, italic: false };
   }
@@ -142,6 +143,10 @@ function sanitizeParams(type, raw) {
         }
         break;
     }
+  }
+  // Obecná kapacita smí být 0 jen se zapnutou kapacitou pro reference (minOff = minimum bez ní).
+  for (const f of FIELDS[type]) {
+    if (f.minOff != null && !(out.refCap && out.refCap.on) && out[f.key] < f.minOff) out[f.key] = f.minOff;
   }
   return out;
 }

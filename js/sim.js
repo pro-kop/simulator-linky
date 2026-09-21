@@ -91,7 +91,7 @@ function initRt(n) {
       n.rt = { pool: n.params.count, open: new Map(), waiting: [], inTemp: 0, inCons: 0, inWh: 0, rr: 0 };
       break;
     case 'tempering':
-      n.rt = { occ: 0, queue: [], rr: 0, blocked: false };
+      n.rt = { occ: 0, occBy: new Map(), queue: [], rr: 0, blocked: false };
       break;
     case 'warehouse':
       n.rt = { items: [], inTotal: 0, outTotal: 0, rr: 0 };
@@ -141,37 +141,53 @@ function fillPacking(pack, n, ref) {
   return placed;
 }
 
-// Kapacita skladu pro danou referenci: { cap, used }.
-// Bez „Kapacity pro reference" je jedna společná kapacita; se zapnutou má každá vypsaná reference
-// vlastní limit a ostatní reference (i bez reference) sdílí obecnou kapacitu skladu.
-function whSlot(w, ref) {
-  const rc = w.params.refCap, items = w.rt.items;
-  if (!rc || !rc.on) return { cap: w.params.capacity, used: items.length };
+// ── Kapacita po referencích (Sklad i Temperace, v obalech) ──
+// Bez „Kapacity pro reference" platí jedna společná kapacita. Se zapnutou má každá vypsaná reference
+// vlastní limit a ostatní reference (i bez reference) sdílí obecnou kapacitu – ta smí být i 0.
+const genCap = (n) => (n.type === 'tempering' ? n.params.maxObals : n.params.capacity);
+// Kolik obalů (dávek) je v prvku pro reference splňující pred.
+function capCount(n, pred) {
+  let s = 0;
+  if (n.type === 'tempering') { for (const [r, v] of n.rt.occBy) if (pred(r)) s += v; }
+  else for (const i of n.rt.items) if (pred(i.ref)) s++;
+  return s;
+}
+// { cap, used } pro danou referenci
+function capSlot(n, ref) {
+  const rc = n.params.refCap;
+  if (!rc || !rc.on) return { cap: genCap(n), used: capCount(n, () => true) };
   const e = rc.list.find((x) => x.name === ref);
-  if (e) return { cap: e.cap, used: items.filter((i) => i.ref === ref).length };
+  if (e) return { cap: e.cap, used: capCount(n, (r) => r === ref) };
   const listed = new Set(rc.list.map((x) => x.name));
-  return { cap: w.params.capacity, used: items.filter((i) => !listed.has(i.ref)).length };
+  return { cap: genCap(n), used: capCount(n, (r) => !listed.has(r)) };
 }
-function whTotalCap(w) {
-  const rc = w.params.refCap;
-  return w.params.capacity + (rc && rc.on ? rc.list.reduce((s, e) => s + e.cap, 0) : 0);
+function capTotal(n) {
+  const rc = n.params.refCap;
+  return genCap(n) + (rc && rc.on ? rc.list.reduce((s, e) => s + e.cap, 0) : 0);
 }
-// Které části skladu jsou plné (názvy referencí, případně „ostatní").
-function whFullParts(w) {
-  const rc = w.params.refCap;
-  if (!rc || !rc.on) return w.rt.items.length >= w.params.capacity ? ['vše'] : [];
-  const out = rc.list.filter((e) => whSlot(w, e.name).used >= e.cap).map((e) => e.name);
+// Které části jsou plné (názvy referencí, „ostatní", nebo „vše" bez rozdělení).
+function capFullParts(n) {
+  const rc = n.params.refCap;
+  if (!rc || !rc.on) return capCount(n, () => true) >= genCap(n) ? ['vše'] : [];
+  const out = rc.list.filter((e) => capCount(n, (r) => r === e.name) >= e.cap).map((e) => e.name);
   const listed = new Set(rc.list.map((x) => x.name));
-  if (w.rt.items.filter((i) => !listed.has(i.ref)).length >= w.params.capacity) out.push('ostatní');
+  if (genCap(n) > 0 && capCount(n, (r) => !listed.has(r)) >= genCap(n)) out.push('ostatní');
   return out;
+}
+// Obsazení temperace: celkem (occ) i po referencích (occBy)
+function tempOcc(t, ref, d) {
+  t.rt.occ = Math.max(0, t.rt.occ + d);
+  const v = (t.rt.occBy.get(ref) || 0) + d;
+  if (v > 0) t.rt.occBy.set(ref, v); else t.rt.occBy.delete(ref);
 }
 
 // Předá obal/dávku (item) prvku t. Vrací true, pokud byl item celý předán.
 function sendPack(t, item) {
   switch (t.type) {
     case 'tempering': {
-      if (t.rt.occ >= t.params.maxObals) return false;
-      t.rt.occ++;
+      const slot = capSlot(t, item.ref);
+      if (slot.used >= slot.cap) return false;      // plno (celkově nebo pro tuto referenci) → čeká
+      tempOcc(t, item.ref, +1);
       const it = copyItem(item, { readyAt: S.sim.t + t.params.hoursMin * 3600 });
       moveObal(it, 'temp');
       t.rt.queue.push(it);
@@ -189,7 +205,7 @@ function sendPack(t, item) {
       wake(t);
       return true;
     case 'warehouse': {
-      const slot = whSlot(t, item.ref);
+      const slot = capSlot(t, item.ref);
       if (slot.used >= slot.cap) return false;      // plno (celkově nebo pro tuto referenci) → čeká
       const it = copyItem(item);
       moveObal(it, 'wh');
@@ -249,7 +265,8 @@ function acceptPieces(t, n, ref, lots) {
       const key = t.id + '|' + ref;
       const lot = lots.get(key);
       if (lot) { lot.pcs += n; return n; }
-      if (t.rt.occ < t.params.maxObals) { t.rt.occ++; lots.set(key, { t, ref, pcs: n }); return n; }
+      const slot = capSlot(t, ref);
+      if (slot.used < slot.cap) { tempOcc(t, ref, +1); lots.set(key, { t, ref, pcs: n }); return n; }
       return 0;
     }
   }
@@ -409,10 +426,10 @@ function tickTempering(temp) {
   rt.blocked = false;
   rt.queue = rt.queue.filter((item) => {
     if (item.readyAt > now) return true;
-    if (!targets.length) { moveObal(item, 'pool'); rt.occ = Math.max(0, rt.occ - 1); return false; }
+    if (!targets.length) { moveObal(item, 'pool'); tempOcc(temp, item.ref, -1); return false; }
     for (const t of rotated(targets, rt.rr)) {
       if (sendPack(t, item)) {
-        rt.occ = Math.max(0, rt.occ - 1);
+        tempOcc(temp, item.ref, -1);
         rt.rr = (rt.rr + 1) % targets.length;
         spawnDot(temp, t);
         return false;
@@ -497,20 +514,21 @@ function updateUI() {
       if (open.length) st = 'run';
       else if (rt.pool <= 0) { st = 'wait'; label = 'bez prázdných obalů'; }
     } else if (n.type === 'tempering') {
-      const mx = n.params.maxObals;
+      const mx = capTotal(n), full = capFullParts(n);
       main = rt.occ + ' / ' + mx + ' obalů';
       const nxt = rt.queue.length ? Math.min(...rt.queue.map((q) => q.readyAt)) : null;
       sec = nxt !== null ? '~' + fmtD(Math.max(0, nxt - now)) : 'prázdná';
-      pct = rt.occ / mx;
+      pct = mx > 0 ? rt.occ / mx : 0;
       if (rt.blocked) { st = 'block'; label = 'nemá kam předat'; }
       else if (rt.occ >= mx) { st = 'full'; label = 'plná'; }
+      else if (full.length) { st = 'full'; label = 'plno: ' + full.join(', '); }
       else if (rt.occ > 0) st = 'run';
     } else if (n.type === 'warehouse') {
-      const cap = whTotalCap(n), cnt = rt.items.length, full = whFullParts(n);
+      const cap = capTotal(n), cnt = rt.items.length, full = capFullParts(n);
       const pcs = rt.items.reduce((s, i) => s + i.pcs, 0);
       main = fmt(cnt) + ' / ' + fmt(cap) + ' obalů';
       sec = 'obsah: ' + fmt(pcs) + ' ks | výdej: ' + fmt(rt.outTotal);
-      pct = cnt / cap;
+      pct = cap > 0 ? cnt / cap : 0;
       if (cnt >= cap) { st = 'full'; label = 'plný'; }
       else if (full.length) { st = 'full'; label = 'plno: ' + full.join(', '); }
       else if (cnt > 0) { st = 'run'; label = 'zásoba'; }
@@ -542,40 +560,54 @@ function updateUI() {
 }
 
 // ── Statistika výkonu (kapacitně relevantní prvky ★) ──
-// Kapacita prvku:  R = 3600 / takt × násobnost × OEE/100   [ks/hod]
-// Celkem:          ΣR; směna = ×12; 24 h = ×24; N dnů = ×24×N
-// Po referencích:  kapacita každého ★ prvku se rozdělí podle skutečného mixu referencí,
-//                  který ten prvek v simulaci vyrobil (R × vyrobeno_ref / vyrobeno_celkem).
-// Neaktivní prvky se nezapočítávají.
+// Pro každý ★ prvek (parametry bere z něj samotného):
+//   R        = 3600 / takt × násobnost × OEE/100              [ks/hod]
+//   směna    = R × Délka směny
+//   hod/den  = min(24, Délka směny × Směn/týden / 5)          (Směn/týden = pětidenní týden)
+//   den      = R × hod/den
+//   N dnů    = den × N                                         (N = 5, 6, 7)
+// Celkem = součet přes ★ prvky. Po referencích se hodnoty každého ★ prvku rozdělí podle
+// skutečného mixu referencí, který ten prvek v simulaci vyrobil. Neaktivní prvky se nepočítají.
+const hoursPerDay = (p) => Math.min(24, p.shiftH * p.shiftsWeek / 5);
+function statVec(p) {
+  const r = 3600 / p.takt * p.nasob * (p.oee / 100), day = r * hoursPerDay(p);
+  return [r, r * p.shiftH, day, day * 5, day * 6, day * 7];
+}
+const vecAdd = (a, b, k) => a.map((x, i) => x + b[i] * k);
+
 function calcStats() {
   const kap = S.nodes.filter((n) => n.active && isMT(n) && n.params.kapRelevant);
   if (!kap.length) return null;
-  let total = 0;
+  let total = [0, 0, 0, 0, 0, 0];
   const byRef = new Map();
   for (const m of kap) {
-    const r = 3600 / m.params.takt * m.params.nasob * (m.params.oee / 100);
-    total += r;
+    const v = statVec(m.params);
+    total = vecAdd(total, v, 1);
     const made = m.rt ? bagTotal(m.rt.madeBy) : 0;
-    if (made > 0) for (const [ref, v] of m.rt.madeBy) bagAdd(byRef, ref, r * v / made);
+    if (made > 0) {
+      for (const [ref, cnt] of m.rt.madeBy) byRef.set(ref, vecAdd(byRef.get(ref) || [0, 0, 0, 0, 0, 0], v, cnt / made));
+    }
   }
+  // Popisky: délka směny a hodiny/den, pokud jsou u všech ★ prvků stejné
+  const same = (f) => { const vals = new Set(kap.map((m) => f(m.params))); return vals.size === 1 ? [...vals][0] : null; };
   const hasRefs = byRef.size > 1 || (byRef.size === 1 && !byRef.has(REF_NONE));
-  return { total, byRef: hasRefs ? byRef : null };
+  return { total, byRef: hasRefs ? byRef : null, shiftH: same((p) => p.shiftH), dayH: same(hoursPerDay) };
 }
 
+const hrs = (x) => (x == null ? 'různé' : fmtNum(Math.round(x * 10) / 10) + ' h');
 const STAT_COLS = [
-  { label: 'Ks / hod', f: (r) => fmt(r) },
-  { label: 'Ks / 12h směna', f: (r) => fmt(r * 12) },
-  { label: 'Ks / 24 h', f: (r) => fmt(r * 24) },
-  { label: 'Ks / 5 dnů', f: (r) => fmt(r * 24 * 5) },
-  { label: 'Ks / 6 dnů', f: (r) => fmt(r * 24 * 6) },
-  { label: 'Ks / 7 dnů', f: (r) => fmt(r * 24 * 7) },
+  { label: () => 'Ks / hod' },
+  { label: (st) => 'Ks / směna (' + hrs(st && st.shiftH) + ')' },
+  { label: (st) => 'Ks / den (' + hrs(st && st.dayH) + ')' },
+  { label: () => 'Ks / 5 dnů' },
+  { label: () => 'Ks / 6 dnů' },
+  { label: () => 'Ks / 7 dnů' },
 ];
 
 // Hlavička a řádek součtu se postaví jednou (tlačítko rozpadu se nepřekresluje každý tick);
 // řádky referencí se přestavují a jsou vidět jen po rozkliknutí.
 let statTotalCells = [];
 function initStats() {
-  $('statHead').replaceChildren(h('tr', {}, [h('th', { text: '' }), ...STAT_COLS.map((c) => h('th', { scope: 'col', text: c.label }))]));
   statTotalCells = STAT_COLS.map(() => h('td', { text: '—' }));
   const tog = h('button', { type: 'button', id: 'statToggle', class: 'st-tog', hidden: true, 'aria-expanded': 'false', 'aria-controls': 'statRefs', title: 'Zobrazit / skrýt rozpad podle reference' });
   $('statTotal').replaceChildren(h('th', { scope: 'row' }, [h('span', { id: 'statTotalLbl', text: 'Výkon (★ kap.)' }), tog]), ...statTotalCells);
@@ -587,7 +619,8 @@ function initStats() {
 
 // st = výsledek calcStats() nebo null (prázdná tabulka)
 function renderStats(st) {
-  statTotalCells.forEach((td, i) => { td.textContent = st ? STAT_COLS[i].f(st.total) : '—'; });
+  $('statHead').replaceChildren(h('tr', {}, [h('th', { text: '' }), ...STAT_COLS.map((c) => h('th', { scope: 'col', text: c.label(st) }))]));
+  statTotalCells.forEach((td, i) => { td.textContent = st ? fmt(st.total[i]) : '—'; });
   const hasRefs = !!(st && st.byRef), open = hasRefs && S.ui.statsOpen;
   const tog = $('statToggle');
   tog.hidden = !hasRefs;
@@ -601,8 +634,8 @@ function renderStats(st) {
   body.replaceChildren(...refs.map((ref) => {
     const dot = h('i', { class: 'rdot' });
     dot.style.background = refColor(ref);
-    const rate = st.byRef.get(ref);
-    return h('tr', { class: 'ref' }, [h('th', { scope: 'row' }, [dot, refName(ref)]), ...STAT_COLS.map((c) => h('td', { text: c.f(rate) }))]);
+    const v = st.byRef.get(ref);
+    return h('tr', { class: 'ref' }, [h('th', { scope: 'row' }, [dot, refName(ref)]), ...v.map((x) => h('td', { text: fmt(x) }))]);
   }));
 }
 
@@ -620,14 +653,13 @@ function updateWarnings(producers) {
   const act = S.nodes.filter((n) => n.active && n.rt);
   const blocked = producers.find((n) => n.rt.blocked);
   const queue = act.find((n) => isMT(n) && !isProducer(n) && n.rt.packQueue.length > 10);
-  const tFull = act.find((n) => n.type === 'tempering' && n.rt.occ >= n.params.maxObals);
-  const wFull = act.find((n) => n.type === 'warehouse' && whFullParts(n).length);
+  const tFull = act.find((n) => n.type === 'tempering' && capFullParts(n).length);
+  const wFull = act.find((n) => n.type === 'warehouse' && capFullParts(n).length);
   if (blocked) showWarning('⚠ ' + blocked.params.name + ' zablokován – navazující prvky nepřijímají (obaly / sklad / temperace)', 'crit');
   else if (queue) showWarning('⚠ Fronta u ' + queue.params.name + ' roste', 'warn');
-  else if (tFull) showWarning('⚠ ' + tFull.params.name + ' je plná', 'warn');
-  else if (wFull) {
-    const parts = whFullParts(wFull);
-    showWarning('⚠ ' + wFull.params.name + (parts[0] === 'vše' ? ' je plný' : ': plná kapacita – ' + parts.join(', ')), 'warn');
+  else if (tFull || wFull) {
+    const n = tFull || wFull, parts = capFullParts(n);
+    showWarning('⚠ ' + n.params.name + (parts[0] === 'vše' ? (tFull ? ' je plná' : ' je plný') : ': plná kapacita – ' + parts.join(', ')), 'warn');
   }
   else showWarning(null);
 }

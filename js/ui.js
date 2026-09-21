@@ -254,7 +254,7 @@ function fieldRow(f, value) {
       v.list.forEach(add);
       const detail = h('div', { class: 'refcap-detail' }, [
         list, dl,
-        h('div', { class: 'pf-note', text: 'Plná kapacita reference zastaví jen tuto referenci. Ostatní reference (i bez reference) sdílí Kapacitu skladu výše.' }),
+        h('div', { class: 'pf-note', text: 'Plná kapacita reference zastaví jen tuto referenci. Ostatní reference (i bez reference) sdílí obecnou kapacitu výše – ta může být 0, pak se přijímají jen vypsané reference.' }),
       ]);
       const sync = () => {
         detail.hidden = !on.checked;
@@ -329,6 +329,7 @@ function fieldRow(f, value) {
   const row = h('div', { class: 'pf' }, [h('label', { for: id, text: label }), control, err]);
   return {
     el: row, key: f.key,
+    setError: (msg) => { err.textContent = msg; row.classList.add('err'); },
     read: () => {
       const r = read();
       err.textContent = r.error || '';
@@ -346,6 +347,14 @@ function openNodePopup(n) {
     for (const r of rows) {
       const res = r.read();
       if (res.error) ok = false; else vals[r.key] = res.value;
+    }
+    // Obecná kapacita 0 je povolená jen se zapnutou kapacitou pro reference.
+    for (const r of rows) {
+      const f = FIELDS[n.type].find((x) => x.key === r.key);
+      if (ok && f.minOff != null && !(vals.refCap && vals.refCap.on) && vals[f.key] < f.minOff) {
+        r.setError('Bez kapacity pro reference musí být alespoň ' + f.minOff + '. Hodnotu 0 lze zadat jen se zapnutou „Kapacitou pro reference“.');
+        ok = false;
+      }
     }
     if (!ok) return false;
     Object.assign(n.params, vals);

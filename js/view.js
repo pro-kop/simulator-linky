@@ -341,32 +341,25 @@ function tooltipContent(n) {
       if (rt.cur) out.push(ttRow(['Zpracovává obal ', ...ttRef(rt.cur.ref)], fmt(rt.cur.pcs) + ' ks'));
       if (rt.packQueue.length) out.push(ttRow('Obaly ve frontě', String(rt.packQueue.length)));
     }
-  } else if (n.type === 'tempering') {
-    out.push(h('div', { class: 'tt-sub', text: 'doba ' + fmtNum(p.hoursMin) + ' h · max. ' + p.maxObals + ' obalů' }));
-    out.push(ttSec('Obsazeno'));
-    if (!rt.queue.length) out.push(ttEmpty('prázdná'));
-    const c = countBy(rt.queue, (i) => i.ref);
-    for (const ref of sortRefs(c.keys())) out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů', c.get(ref) / p.maxObals, refColor(ref)));
-  } else if (n.type === 'warehouse') {
-    const rc = p.refCap, perRef = rc && rc.on;
-    out.push(h('div', { class: 'tt-sub', text: 'kapacita ' + fmt(whTotalCap(n)) + ' obalů' + (perRef ? ' (po referencích)' : '') + ' · vydáno ' + fmt(rt.outTotal) }));
-    out.push(ttSec('Obsah'));
-    const c = countBy(rt.items, (i) => i.ref);
-    const pcsOf = (pred) => rt.items.filter(pred).reduce((s, i) => s + i.pcs, 0);
+  } else if (n.type === 'tempering' || n.type === 'warehouse') {
+    const isT = n.type === 'tempering', items = isT ? rt.queue : rt.items;
+    const rc = p.refCap, perRef = rc && rc.on, gen = genCap(n);
+    const info = isT ? 'doba ' + fmtNum(p.hoursMin) + ' h · ' : '';
+    const tail = isT ? '' : ' · vydáno ' + fmt(rt.outTotal);
+    out.push(h('div', { class: 'tt-sub', text: info + 'kapacita ' + fmt(capTotal(n)) + ' obalů' + (perRef ? ' (po referencích)' : '') + tail }));
+    out.push(ttSec(isT ? 'Obsazeno' : 'Obsah'));
+    const c = countBy(items, (i) => i.ref);
+    const pcsOf = (pred) => items.filter(pred).reduce((s2, i) => s2 + i.pcs, 0);
+    const row = (label, k, cap, pred, color) =>
+      ttRow(label, k + (cap != null ? ' / ' + fmt(cap) : '') + ' obalů · ' + fmt(pcsOf(pred)) + ' ks', cap ? k / cap : (cap === 0 ? 1 : k / gen), color);
     if (perRef) {
       // každá vypsaná reference se svým limitem + společná část pro ostatní
-      for (const e of rc.list) {
-        const k = c.get(e.name) || 0;
-        out.push(ttRow(ttRef(e.name), k + ' / ' + fmt(e.cap) + ' obalů · ' + fmt(pcsOf((i) => i.ref === e.name)) + ' ks', k / e.cap, refColor(e.name)));
-      }
+      for (const e of rc.list) out.push(row(ttRef(e.name), c.get(e.name) || 0, e.cap, (i) => i.ref === e.name, refColor(e.name)));
       const listed = new Set(rc.list.map((e) => e.name));
-      const others = rt.items.filter((i) => !listed.has(i.ref)).length;
-      out.push(ttRow('Ostatní', others + ' / ' + fmt(p.capacity) + ' obalů · ' + fmt(pcsOf((i) => !listed.has(i.ref))) + ' ks', others / p.capacity));
+      out.push(row('Ostatní', items.filter((i) => !listed.has(i.ref)).length, gen, (i) => !listed.has(i.ref)));
     } else {
-      if (!rt.items.length) out.push(ttEmpty('prázdný'));
-      for (const ref of sortRefs(c.keys())) {
-        out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů · ' + fmt(pcsOf((i) => i.ref === ref)) + ' ks', c.get(ref) / p.capacity, refColor(ref)));
-      }
+      if (!items.length) out.push(ttEmpty(isT ? 'prázdná' : 'prázdný'));
+      for (const ref of sortRefs(c.keys())) out.push(row(ttRef(ref), c.get(ref), null, (i) => i.ref === ref, refColor(ref)));
     }
   } else {
     return null;
