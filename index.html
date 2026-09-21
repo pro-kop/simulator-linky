@@ -85,13 +85,32 @@
 </div>
 
 <footer id="bot">
-  <table class="stt" aria-label="Výkon linky">
-    <thead id="statHead"></thead>
-    <tbody id="statRefs" hidden></tbody>
-    <tfoot>
-      <tr class="total" id="statTotal"></tr>
-    </tfoot>
-  </table>
+  <section class="bsec bsec-prod" aria-labelledby="prodH">
+    <div class="bsec-h" id="prodH">Výroba</div>
+    <table class="stt" aria-labelledby="prodH">
+      <thead id="statHead"></thead>
+      <tbody id="statRefs" hidden></tbody>
+      <tfoot>
+        <tr class="total" id="statTotal"></tr>
+      </tfoot>
+    </table>
+  </section>
+  <section class="bsec bsec-pack" id="packSec" aria-labelledby="packH" hidden>
+    <div class="bsec-h" id="packH">Obaly</div>
+    <table class="stt stt-pack" aria-labelledby="packH">
+      <thead>
+        <tr>
+          <th></th>
+          <th scope="col" title="Počet obalů v oběhu celkem">Celkem</th>
+          <th scope="col" title="Prázdné obaly v poolu">Volné</th>
+          <th scope="col" title="Obaly, které se právě plní">Rozplněné</th>
+          <th scope="col" title="Plné obaly mimo pool: čekají na odvoz, v temperaci, ve zpracování, ve skladu">Plné</th>
+          <th scope="col" title="Nejvyšší počet plných obalů najednou od startu simulace">Max plných</th>
+        </tr>
+      </thead>
+      <tbody id="packBody"></tbody>
+    </table>
+  </section>
 </footer>
 <div id="tip" role="tooltip" hidden></div>
 

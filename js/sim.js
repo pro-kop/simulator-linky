@@ -118,7 +118,35 @@ function sampleOcc(n, dt) {
   if (tot > s.maxTot) s.maxTot = tot;
 }
 
-function resetAllRt() { S.nodes.forEach(initRt); }
+function resetAllRt() { S.nodes.forEach(initRt); S.ui.packMax.clear(); }
+
+// ── Obaly po skupinách ──
+// Skupina = parametr „Skupina obalů"; bez vyplnění se obal počítá pod svým názvem.
+// Celkem = Počet obalů; Volné = prázdné v poolu; Rozplněné = právě se plní;
+// Plné = mimo pool a naplněné (čekají na odvoz, v temperaci, ve zpracování, ve skladu).
+const packGroupKey = (n) => (n.params.group || n.params.name || 'Obal').trim();
+function packGroups() {
+  const g = new Map();
+  for (const n of S.nodes) {
+    if (n.type !== 'packing' || !n.active) continue;
+    const key = packGroupKey(n);
+    const e = g.get(key) || { total: 0, free: 0, partial: 0, full: 0 };
+    const rt = n.rt;
+    e.total += n.params.count;
+    if (rt) {
+      e.free += rt.pool;
+      e.partial += rt.open.size;
+      e.full += rt.waiting.length + rt.inTemp + rt.inCons + rt.inWh;
+    } else {
+      e.free += n.params.count;
+    }
+    g.set(key, e);
+  }
+  return g;
+}
+function samplePackMax() {
+  for (const [key, e] of packGroups()) if (e.full > (S.ui.packMax.get(key) || 0)) S.ui.packMax.set(key, e.full);
+}
 
 function wake(m) { if (m.rt.nextAt === Infinity) m.rt.nextAt = S.sim.t; }
 
@@ -487,6 +515,7 @@ function tick() {
     act.filter(isProducer).forEach(tickProducer);
     act.filter((n) => isMT(n) && !isProducer(n)).forEach(tickConsumer);
     act.filter((n) => n.type === 'tempering' || n.type === 'warehouse').forEach((n) => sampleOcc(n, dt));
+    samplePackMax();
     updateUI();
   } catch (err) {
     stopSim();
@@ -617,8 +646,8 @@ function calcStats() {
 const hrs = (x) => (x == null ? 'různé' : fmtNum(Math.round(x * 10) / 10) + ' h');
 const STAT_COLS = [
   { label: () => 'Ks / hod' },
-  { label: (st) => 'Ks / směna (' + hrs(st && st.shiftH) + ')' },
-  { label: (st) => 'Ks / den (' + hrs(st && st.dayH) + ')' },
+  { label: (st) => 'Ks / směna' + (st ? ' (' + hrs(st.shiftH) + ')' : '') },
+  { label: (st) => 'Ks / den' + (st ? ' (' + hrs(st.dayH) + ')' : '') },
   { label: () => 'Ks / 5 dnů' },
   { label: () => 'Ks / 6 dnů' },
   { label: () => 'Ks / 7 dnů' },
@@ -659,7 +688,26 @@ function renderStats(st) {
   }));
 }
 
-function updateStats() { renderStats(calcStats()); }
+function renderPackStats() {
+  const groups = packGroups(), started = S.sim.running || S.sim.t > 0;
+  $('packSec').hidden = groups.size === 0;
+  if (!groups.size) return;
+  const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'cs'));
+  $('packBody').replaceChildren(...keys.map((k) => {
+    const e = groups.get(k), mx = S.ui.packMax.get(k) || 0;
+    const pct = e.total > 0 ? ' (' + Math.round(e.full / e.total * 100) + ' %)' : '';
+    return h('tr', { class: 'ref' }, [
+      h('th', { scope: 'row', text: k }),
+      h('td', { class: 'strong', text: fmt(e.total) }),
+      h('td', { text: fmt(e.free) }),
+      h('td', { text: fmt(e.partial) }),
+      h('td', { text: fmt(e.full) + pct }),
+      h('td', { text: started ? fmt(mx) : '—' }),
+    ]);
+  }));
+}
+
+function updateStats() { renderStats(calcStats()); renderPackStats(); }
 
 function showWarning(text, level) {
   const wb = $('wb');

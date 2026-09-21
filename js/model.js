@@ -50,6 +50,7 @@ const FIELDS = {
   kompletace: [F_NAME, ...MT_FIELDS],
   packing: [
     F_NAME,
+    { key: 'group', label: 'Skupina obalů', unit: 'nepovinné', kind: 'text', max: 40 },
     { key: 'capacity', label: 'Kapacita obalu', unit: 'ks', kind: 'num', min: 1, max: 1e6, int: true },
     { key: 'count', label: 'Počet obalů', unit: 'ks', kind: 'num', min: 1, max: 1e5, int: true },
     F_KUS,
@@ -80,7 +81,7 @@ function defaultParams(type) {
   switch (type) {
     case 'machine':    return { name: 'Stroj', refs: [], shiftH: 12, shiftsWeek: 10, oee: 85, takt: 40, nasob: 6, kapRelevant: false, kusovnik: 1 };
     case 'kompletace': return { name: 'Kompletace', shiftH: 12, shiftsWeek: 10, oee: 85, takt: 45, nasob: 3, kapRelevant: false, kusovnik: 1 };
-    case 'packing':    return { name: 'Obal', capacity: 350, count: 10, kusovnik: 1 };
+    case 'packing':    return { name: 'Obal', group: '', capacity: 350, count: 10, kusovnik: 1 };
     case 'tempering':  return { name: 'Temperace', hoursMin: 6, maxObals: 20, kusovnik: 1, refCap: { on: false, list: [] } };
     case 'warehouse':  return { name: 'Sklad', capacity: 50, refCap: { on: false, list: [] } };
     case 'textnode':   return { content: '', fontSize: 14, color: '', bgColor: '', bold: false, italic: false };
@@ -192,6 +193,7 @@ const S = {
     draw: null, drawColor: PASTELS[0].hex,
     selShape: null, drag: null,
     statsOpen: false,
+    packMax: new Map(),     // skupina obalů → max. počet plných obalů od startu
     mouse: { x: 0, y: 0 },
   },
 };

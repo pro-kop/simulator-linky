@@ -147,7 +147,7 @@ function buildNodeEl(n) {
     const act = h('input', { type: 'checkbox', 'aria-label': 'Prvek je aktivní' });
     const actWrap = h('label', { class: 'nact', title: 'Aktivní prvek – odškrtnutím ho vyřadíte z toku' }, act);
     const name = h('div', { class: 'nname' });
-    const refs = n.type === 'machine' ? h('div', { class: 'nrefs', hidden: true }) : null;
+    const refs = n.type === 'machine' || n.type === 'packing' ? h('div', { class: 'nrefs', hidden: true }) : null;
     const kap = isMT(n) ? h('span', { class: 'nbadge kap', hidden: true, text: '★ kap.' }) : null;
     const bn = h('span', { class: 'nbadge bn', hidden: true, text: 'úzké místo' });
     const main = h('div', { class: 'nmain', text: '–' });
@@ -191,7 +191,11 @@ function refreshNodeHeader(n) {
   }
   u.name.textContent = p.name || TYPES[n.type].label;
   u.name.title = u.name.textContent;
-  if (u.refs) {
+  if (u.refs && n.type === 'packing') {
+    u.refs.textContent = p.group ? 'skupina: ' + p.group : '';
+    u.refs.title = p.group ? 'Skupina obalů: ' + p.group : '';
+    u.refs.hidden = !p.group;
+  } else if (u.refs) {
     const r = p.refs || [];
     u.refs.textContent = refLabel(r);
     u.refs.title = r.length ? 'Reference: ' + refLabel(r) : '';
@@ -307,7 +311,7 @@ function tooltipContent(n) {
   const rt = n.rt, p = n.params, out = [h('div', { class: 'tt-h', text: p.name })];
   if (n.type === 'packing') {
     const cap = p.capacity;
-    out.push(h('div', { class: 'tt-sub', text: 'kapacita obalu ' + fmt(cap) + ' ks · ' + p.count + ' obalů' }));
+    out.push(h('div', { class: 'tt-sub', text: (p.group ? 'skupina ' + p.group + ' · ' : '') + 'kapacita obalu ' + fmt(cap) + ' ks · ' + p.count + ' obalů' }));
     out.push(ttSec('Rozplněné obaly'));
     if (!rt.open.size) out.push(ttEmpty('žádný obal se neplní'));
     for (const ref of sortRefs(rt.open.keys())) {
