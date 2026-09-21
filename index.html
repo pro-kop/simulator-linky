@@ -85,20 +85,12 @@
 </div>
 
 <footer id="bot">
-  <div id="stats">
-    <div class="sg">
-      <div class="sc"><div class="sc-v" id="sv-h1">—</div><div class="sc-l">Ks / hodinu</div></div>
-      <div class="sc"><div class="sc-v" id="sv-h12">—</div><div class="sc-l">Ks / 12h směna</div></div>
-      <div class="sc"><div class="sc-v" id="sv-h24">—</div><div class="sc-l">Ks / 24 hodin</div></div>
-      <div class="sc"><div class="sc-v" id="sv-takt">—</div><div class="sc-l">Průměrný takt (s/cyklus)</div></div>
-      <div class="sc"><div class="sc-v" id="sv-d5">—</div><div class="sc-l">Ks / 5 dnů</div></div>
-      <div class="sc"><div class="sc-v" id="sv-d6">—</div><div class="sc-l">Ks / 6 dnů</div></div>
-      <div class="sc"><div class="sc-v" id="sv-d7">—</div><div class="sc-l">Ks / 7 dnů</div></div>
-      <div class="sc empty"></div>
-    </div>
-    <div id="refStats" hidden></div>
-  </div>
+  <table class="stt" aria-label="Výkon linky">
+    <thead id="statHead"></thead>
+    <tbody id="statBody"></tbody>
+  </table>
 </footer>
+<div id="tip" role="tooltip" hidden></div>
 
 <div id="ov" hidden></div>
 <div id="pop" role="dialog" aria-modal="true" aria-labelledby="ptitle" hidden>

@@ -262,3 +262,102 @@ function spawnDot(a, b) {
 function clearDots() {
   nl.querySelectorAll('.adot').forEach((d) => d.getAnimations().forEach((a) => a.cancel()));
 }
+
+// ── Tooltip s detailem prvku (během simulace) ──
+let tipNode = null;
+
+function showTooltip(n) { tipNode = n; refreshTooltip(); }
+function hideTooltip() { tipNode = null; $('tip').hidden = true; }
+
+function refreshTooltip() {
+  const tip = $('tip'), n = tipNode;
+  if (!n || !n.el.isConnected || !n.rt || S.ui.drag || (S.sim.t <= 0 && !S.sim.running)) { tip.hidden = true; return; }
+  const body = tooltipContent(n);
+  if (!body) { tip.hidden = true; return; }
+  tip.replaceChildren(...body);
+  tip.hidden = false;
+  const r = n.el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = r.right + 10;
+  if (x + tw > window.innerWidth - 8) x = r.left - tw - 10;
+  tip.style.left = Math.max(8, x) + 'px';
+  tip.style.top = clamp(r.top, 8, Math.max(8, window.innerHeight - th - 8)) + 'px';
+}
+
+const ttSec = (text) => h('div', { class: 'tt-sec', text });
+const ttEmpty = (text) => h('div', { class: 'tt-empty', text });
+function ttRow(label, value, pct, color, cls) {
+  const kids = [h('span', {}, label), h('b', { text: value })];
+  if (pct != null) {
+    const fill = h('i');
+    fill.style.width = clamp(pct * 100, 0, 100) + '%';
+    if (color) fill.style.background = color;
+    kids.push(h('div', { class: 'tt-bar' }, fill));
+  }
+  return h('div', { class: 'tt-row' + (cls ? ' ' + cls : '') }, kids);
+}
+function ttRef(ref) {
+  const dot = h('i', { class: 'rdot' });
+  dot.style.background = refColor(ref);
+  return [dot, refName(ref)];
+}
+const countBy = (list, key) => list.reduce((m, x) => m.set(key(x), (m.get(key(x)) || 0) + 1), new Map());
+const sortRefs = (keys) => [...keys].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
+
+function tooltipContent(n) {
+  const rt = n.rt, p = n.params, out = [h('div', { class: 'tt-h', text: p.name })];
+  if (n.type === 'packing') {
+    const cap = p.capacity;
+    out.push(h('div', { class: 'tt-sub', text: 'kapacita obalu ' + fmt(cap) + ' ks · ' + p.count + ' obalů' }));
+    out.push(ttSec('Rozplněné obaly'));
+    if (!rt.open.size) out.push(ttEmpty('žádný obal se neplní'));
+    for (const ref of sortRefs(rt.open.keys())) {
+      const f = rt.open.get(ref);
+      out.push(ttRow(ttRef(ref), fmt(f) + ' / ' + fmt(cap) + ' ks', f / cap, refColor(ref)));
+    }
+    out.push(ttSec('Obaly v oběhu'));
+    const row = (label, v) => ttRow(label, String(v), v / p.count);
+    out.push(row('Volné (prázdné)', rt.pool));
+    out.push(row('Rozplněné', rt.open.size));
+    out.push(row('Plné, čekají na odvoz', rt.waiting.length));
+    if (rt.waiting.length) {
+      const w = countBy(rt.waiting, (r) => r);
+      if (w.size > 1 || !w.has(REF_NONE)) for (const ref of sortRefs(w.keys())) out.push(ttRow(ttRef(ref), String(w.get(ref)), null, null, 'tt-indent'));
+    }
+    out.push(row('V temperaci', rt.inTemp));
+    out.push(row('Ve zpracování', rt.inCons));
+    if (rt.inWh) out.push(row('Ve skladu', rt.inWh));
+  } else if (isMT(n)) {
+    out.push(h('div', { class: 'tt-sub', text: 'takt ' + fmtNum(p.takt) + ' s · ' + p.nasob + ' ks/cyklus · OEE ' + fmtNum(p.oee) + ' %' }));
+    out.push(ttSec('Vyrobeno'));
+    const total = bagTotal(rt.madeBy);
+    if (!total) out.push(ttEmpty('zatím nic'));
+    for (const ref of sortRefs(rt.madeBy.keys())) {
+      const v = rt.madeBy.get(ref);
+      out.push(ttRow(ttRef(ref), fmt(v) + ' ks · ' + Math.round(v / total * 100) + ' %', v / total, refColor(ref)));
+    }
+    if (rt.pieceBuf.size || rt.packQueue.length || rt.cur) {
+      out.push(ttSec('Na vstupu'));
+      for (const ref of sortRefs(rt.pieceBuf.keys())) out.push(ttRow(ttRef(ref), fmt(rt.pieceBuf.get(ref)) + ' ks'));
+      if (rt.cur) out.push(ttRow(['Zpracovává obal ', ...ttRef(rt.cur.ref)], fmt(rt.cur.pcs) + ' ks'));
+      if (rt.packQueue.length) out.push(ttRow('Obaly ve frontě', String(rt.packQueue.length)));
+    }
+  } else if (n.type === 'tempering') {
+    out.push(h('div', { class: 'tt-sub', text: 'doba ' + fmtNum(p.hoursMin) + ' h · max. ' + p.maxObals + ' obalů' }));
+    out.push(ttSec('Obsazeno'));
+    if (!rt.queue.length) out.push(ttEmpty('prázdná'));
+    const c = countBy(rt.queue, (i) => i.ref);
+    for (const ref of sortRefs(c.keys())) out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů', c.get(ref) / p.maxObals, refColor(ref)));
+  } else if (n.type === 'warehouse') {
+    out.push(h('div', { class: 'tt-sub', text: 'kapacita ' + fmt(p.capacity) + ' obalů · vydáno ' + fmt(rt.outTotal) }));
+    out.push(ttSec('Obsah'));
+    if (!rt.items.length) out.push(ttEmpty('prázdný'));
+    const c = countBy(rt.items, (i) => i.ref);
+    for (const ref of sortRefs(c.keys())) {
+      const pcs = rt.items.filter((i) => i.ref === ref).reduce((s, i) => s + i.pcs, 0);
+      out.push(ttRow(ttRef(ref), c.get(ref) + ' obalů · ' + fmt(pcs) + ' ks', c.get(ref) / p.capacity, refColor(ref)));
+    }
+  } else {
+    return null;
+  }
+  return out;
+}

@@ -147,6 +147,13 @@ function refLabel(refs) {
 }
 const REF_NONE = '';
 const refName = (r) => (r === REF_NONE ? 'bez reference' : r);
+// Stálá barva reference (kategoriální paleta, přidělená v pořadí, jak se reference objeví).
+const REF_COLORS = new Map();
+function refColor(ref) {
+  if (ref === REF_NONE) return 'var(--idle-fill)';
+  if (!REF_COLORS.has(ref)) REF_COLORS.set(ref, 'var(--cat-' + ((REF_COLORS.size % 8) + 1) + ')');
+  return REF_COLORS.get(ref);
+}
 
 // ── Stav aplikace ──
 const S = {

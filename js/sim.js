@@ -425,8 +425,6 @@ function tick() {
 }
 
 // ── Zobrazení stavu ──
-const bagText = (bag) => [...bag].map(([r, n]) => refName(r) + ' ' + fmt(n)).join(', ');
-
 function updateUI() {
   const now = S.sim.t, simH = now / 3600;
   $('clock').textContent = '⏱ ' + fmtT(now);
@@ -434,10 +432,9 @@ function updateUI() {
   for (const n of S.nodes) {
     if (!n.rt || !n.ui) continue;
     const rt = n.rt, u = n.ui;
-    let main = '–', sec = '', pct = 0, st = 'idle', label, tip = '';
+    let main = '–', sec = '', pct = 0, st = 'idle', label;
     if (isMT(n)) {
       main = fmt(rt.made) + ' ks';
-      if (rt.madeBy.size > 1 || (rt.madeBy.size === 1 && !rt.madeBy.has(REF_NONE))) tip = 'Vyrobeno: ' + bagText(rt.madeBy);
       if (isProducer(n)) {
         const pk = outsOf(n).find((x) => x.type === 'packing');
         if (pk) {
@@ -463,7 +460,6 @@ function updateUI() {
       else main = 'čeká: ' + rt.waiting.length;
       sec = 'vol: ' + rt.pool + ' | temp: ' + rt.inTemp + ' | k: ' + rt.inCons + (rt.inWh ? ' | sk: ' + rt.inWh : '');
       pct = open.length ? Math.max(...open) / cap : 0;
-      if (rt.open.size > 1 || (rt.open.size === 1 && !rt.open.has(REF_NONE))) tip = 'Rozplněno: ' + bagText(rt.open);
       if (open.length) st = 'run';
       else if (rt.pool <= 0) { st = 'wait'; label = 'bez prázdných obalů'; }
     } else if (n.type === 'tempering') {
@@ -487,7 +483,6 @@ function updateUI() {
     }
     if (!n.active) { st = 'off'; label = undefined; }
     u.main.textContent = main;
-    u.main.title = tip;
     u.sec.textContent = sec;
     u.fill.style.width = clamp(pct * 100, 0, 100) + '%';
     setStatus(n, st, label);
@@ -506,54 +501,67 @@ function updateUI() {
     if (bn.rt.made < top * 0.99) bn.ui.bn.hidden = false;
   }
 
-  updateStats(producers, simH);
-  updateRefStats(simH);
+  updateStats();
+  refreshTooltip();
   updateWarnings(producers);
 }
 
-// Statistiky – vzorce beze změny oproti původní verzi (viz report k bodu 6),
-// jen se nezapočítávají neaktivní prvky.
-const STAT_IDS = ['sv-h1', 'sv-h12', 'sv-h24', 'sv-takt', 'sv-d5', 'sv-d6', 'sv-d7'];
-function updateStats(producers, simH) {
+// ── Statistika výkonu (kapacitně relevantní prvky ★) ──
+// Kapacita prvku:  R = 3600 / takt × násobnost × OEE/100   [ks/hod]
+// Celkem:          ΣR; směna = ×12; 24 h = ×24; N dnů = ×24×N; takt linky = 3600 / ΣR [s/ks]
+// Po referencích:  kapacita každého ★ prvku se rozdělí podle skutečného mixu referencí,
+//                  který ten prvek v simulaci vyrobil (R × vyrobeno_ref / vyrobeno_celkem).
+// Neaktivní prvky se nezapočítávají.
+function calcStats() {
   const kap = S.nodes.filter((n) => n.active && isMT(n) && n.params.kapRelevant);
-  if (!kap.length) { STAT_IDS.forEach((id) => { $(id).textContent = '—'; }); return; }
-  const rateH = kap.reduce((s, m) => s + 3600 / m.params.takt * m.params.nasob * (m.params.oee / 100), 0);
-  const h24 = rateH * 24;
-  $('sv-h1').textContent = fmt(rateH);
-  $('sv-h12').textContent = fmt(rateH * 12);
-  $('sv-h24').textContent = fmt(h24);
-  $('sv-d5').textContent = fmt(h24 * 5);
-  $('sv-d6').textContent = fmt(h24 * 6);
-  $('sv-d7').textContent = fmt(h24 * 7);
-  const kp = kap.filter((n) => n.rt && isProducer(n) && n.rt.made > 0);
-  if (simH > 0.01 && kp.length) {
-    const tv = kp.map((m) => S.sim.t / (m.rt.made / m.params.nasob));
-    $('sv-takt').textContent = (tv.reduce((a, b) => a + b, 0) / tv.length).toFixed(1) + ' s';
-  } else {
-    $('sv-takt').textContent = '—';
+  if (!kap.length) return null;
+  let total = 0;
+  const byRef = new Map();
+  for (const m of kap) {
+    const r = 3600 / m.params.takt * m.params.nasob * (m.params.oee / 100);
+    total += r;
+    const made = m.rt ? bagTotal(m.rt.madeBy) : 0;
+    if (made > 0) for (const [ref, v] of m.rt.madeBy) bagAdd(byRef, ref, r * v / made);
   }
+  const hasRefs = byRef.size > 1 || (byRef.size === 1 && !byRef.has(REF_NONE));
+  return { total, byRef: hasRefs ? byRef : null };
 }
 
-// Vyrobeno podle reference – výstup kapacitně relevantních prvků ze simulace.
-// Zobrazí se jen tehdy, když se v toku reference opravdu objevují.
-function updateRefStats(simH) {
-  const box = $('refStats');
-  const sum = new Map();
-  for (const n of S.nodes) {
-    if (n.active && n.rt && isMT(n) && n.params.kapRelevant) for (const [r, v] of n.rt.madeBy) bagAdd(sum, r, v);
-  }
-  if (!sum.size || (sum.size === 1 && sum.has(REF_NONE))) { box.hidden = true; return; }
-  const refs = [...sum.keys()].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
-  const chips = refs.map((r) => {
-    const v = sum.get(r);
-    return h('span', { class: 'rchip' }, [
-      h('b', { text: refName(r) }),
-      fmt(v) + ' ks' + (simH > 0.01 ? ' · ' + fmt(v / simH) + ' ks/h' : ''),
-    ]);
-  });
-  box.replaceChildren(h('span', { class: 'rlbl', text: 'Vyrobeno podle reference (★ kap., simulace):' }), ...chips);
-  box.hidden = false;
+const STAT_COLS = [
+  { label: 'Ks / hod', f: (r) => fmt(r) },
+  { label: 'Ks / 12h směna', f: (r) => fmt(r * 12) },
+  { label: 'Ks / 24 h', f: (r) => fmt(r * 24) },
+  { label: 'Ks / 5 dnů', f: (r) => fmt(r * 24 * 5) },
+  { label: 'Ks / 6 dnů', f: (r) => fmt(r * 24 * 6) },
+  { label: 'Ks / 7 dnů', f: (r) => fmt(r * 24 * 7) },
+  { label: 'Takt linky (s/ks)', f: (r) => (r > 0 ? fmtNum(Math.round(3600 / r * 10) / 10) : '—') },
+];
+
+function statRow(cls, head, rate) {
+  return h('tr', { class: cls }, [
+    h('th', { scope: 'row' }, head),
+    ...STAT_COLS.map((c) => h('td', { text: rate == null ? '—' : c.f(rate) })),
+  ]);
 }
+
+// st = výsledek calcStats() nebo null (prázdná tabulka)
+function renderStats(st) {
+  $('statHead').replaceChildren(h('tr', {}, [h('th', { text: '' }), ...STAT_COLS.map((c) => h('th', { scope: 'col', text: c.label }))]));
+  const rows = [];
+  if (st && st.byRef) {
+    const refs = [...st.byRef.keys()].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
+    refs.forEach((ref) => {
+      const dot = h('i', { class: 'rdot' });
+      dot.style.background = refColor(ref);
+      rows.push(statRow('ref', [dot, refName(ref)], st.byRef.get(ref)));
+    });
+  }
+  const totalHead = st && st.byRef ? 'Celkem' : 'Výkon (★ kap.)';
+  rows.push(statRow('total', totalHead, st ? st.total : null));
+  $('statBody').replaceChildren(...rows);
+}
+
+function updateStats() { renderStats(calcStats()); }
 
 function showWarning(text, level) {
   const wb = $('wb');
@@ -603,7 +611,6 @@ function resetDisplay() {
   for (const n of S.nodes) {
     if (!n.ui || !n.ui.main) continue;
     n.ui.main.textContent = '–';
-    n.ui.main.title = '';
     n.ui.sec.textContent = '';
     n.ui.fill.style.width = '0%';
     n.ui.bn.hidden = true;
@@ -611,7 +618,7 @@ function resetDisplay() {
   }
   clearDots();
   showWarning(null);
-  STAT_IDS.forEach((id) => { $(id).textContent = '—'; });
-  $('refStats').hidden = true;
+  updateStats();          // teoretický výkon je vidět i bez běžící simulace
+  hideTooltip();
 }
 function resetSim() { stopSim(); resetAllRt(); resetDisplay(); }

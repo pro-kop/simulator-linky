@@ -19,7 +19,12 @@ function createNode(type, x, y, params, id, active) {
 function bindNode(n) {
   const el = n.el;
   const isCtl = (t) => t.closest('.nport, .ndel, .nact');
+  if (n.type !== 'textnode') {
+    el.addEventListener('mouseenter', () => showTooltip(n));
+    el.addEventListener('mouseleave', hideTooltip);
+  }
   el.addEventListener('mousedown', (e) => {
+    hideTooltip();
     if (e.button !== 0 || S.ui.draw || S.ui.connect || isCtl(e.target)) return;
     const w = eventWorld(e);
     S.ui.drag = { kind: 'node', n, ox: w.x - n.x, oy: w.y - n.y };
@@ -45,15 +50,18 @@ function setActive(n, on) {
   if (n.active && n.rt && isMT(n) && n.rt.nextAt !== Infinity) n.rt.nextAt = Math.max(n.rt.nextAt, S.sim.t);
   refreshNodeHeader(n);
   drawEdges();
+  updateStats();
 }
 
 function deleteNode(n) {
+  hideTooltip();
   S.nodes = S.nodes.filter((x) => x !== n);
   S.edges = S.edges.filter((e) => e.from !== n.id && e.to !== n.id);
   if (S.ui.csrc === n.id) S.ui.csrc = null;
   if (POP.target === n) closePopup();
   n.el.remove();
   drawEdges();
+  updateStats();
 }
 
 function addEdge(from, to) {
@@ -290,6 +298,7 @@ function openNodePopup(n) {
     Object.assign(n.params, vals);
     refreshNodeHeader(n);
     drawEdges();
+    updateStats();
     return true;
   };
   openPopup('Parametry – ' + TYPES[n.type].label, rows.map((r) => r.el), onSave, n);
@@ -354,6 +363,7 @@ function openShapePopup(s) {
 
 // ── Model: vyčištění, import, export ──
 function clearModel() {
+  hideTooltip();
   S.nodes.forEach((n) => n.el.remove());
   S.shapes.forEach((s) => s.el.remove());
   S.nodes = []; S.edges = []; S.shapes = [];
@@ -482,6 +492,7 @@ function bindUI() {
   // Plátno: zoom
   wrap.addEventListener('wheel', (e) => {
     e.preventDefault();
+    hideTooltip();
     const r = wrap.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
     const k = clamp(S.view.k * (e.deltaY > 0 ? 0.9 : 1.1), 0.2, 3);
     S.view.x = mx - (mx - S.view.x) * (k / S.view.k);
