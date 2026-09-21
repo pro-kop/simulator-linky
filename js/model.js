@@ -46,7 +46,7 @@ const MT_FIELDS = [
   F_KUS,
 ];
 const FIELDS = {
-  machine: [F_NAME, { key: 'refs', label: 'Reference', unit: 'max. 4', kind: 'refs', maxItems: 4, max: 60 }, ...MT_FIELDS],
+  machine: [F_NAME, { key: 'refs', label: 'Reference a podíl', unit: 'max. 4', kind: 'refs', maxItems: 4, max: 60 }, ...MT_FIELDS],
   kompletace: [F_NAME, ...MT_FIELDS],
   packing: [
     F_NAME,
@@ -110,15 +110,43 @@ function sanitizeParams(type, raw) {
         out[f.key] = isHexColor(v) ? v : '';
         break;
       case 'refs':
+        // Nový formát [{name, share}]; starší export měl jen pole názvů.
         if (Array.isArray(v)) {
-          out[f.key] = v.filter((r) => typeof r === 'string' || typeof r === 'number')
-            .map((r) => String(r).trim().slice(0, f.max)).filter(Boolean).slice(0, f.maxItems);
+          out[f.key] = v.map((r) => {
+            if (typeof r === 'string' || typeof r === 'number') return { name: String(r).trim().slice(0, f.max), share: null };
+            if (r && typeof r === 'object' && (typeof r.name === 'string' || typeof r.name === 'number')) {
+              const s = Number(r.share);
+              const share = r.share == null || r.share === '' || !Number.isFinite(s) ? null : clamp(s, 0, 100);
+              return { name: String(r.name).trim().slice(0, f.max), share };
+            }
+            return null;
+          }).filter((r) => r && r.name).slice(0, f.maxItems);
         }
         break;
     }
   }
   return out;
 }
+
+// ── Reference ──
+// Podíly: vyplněné se berou, jak jsou; nevyplněné si rovným dílem rozdělí zbytek do 100 %.
+// Výsledek je normalizovaný (součet w = 1).
+function refShares(refs) {
+  if (!refs || !refs.length) return [];
+  const fixed = refs.filter((r) => r.share != null), free = refs.length - fixed.length;
+  const sumFixed = fixed.reduce((s, r) => s + r.share, 0);
+  const each = free ? Math.max(0, 100 - sumFixed) / free : 0;
+  const list = refs.map((r) => ({ name: r.name, w: r.share != null ? r.share : each }));
+  const tot = list.reduce((s, r) => s + r.w, 0);
+  return list.map((r) => ({ name: r.name, w: tot > 0 ? r.w / tot : 1 / list.length }));
+}
+function refLabel(refs) {
+  if (!refs || !refs.length) return '';
+  if (refs.length === 1) return refs[0].name;
+  return refShares(refs).map((r) => r.name + ' ' + Math.round(r.w * 100) + ' %').join(' · ');
+}
+const REF_NONE = '';
+const refName = (r) => (r === REF_NONE ? 'bez reference' : r);
 
 // ── Stav aplikace ──
 const S = {

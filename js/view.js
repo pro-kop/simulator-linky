@@ -193,8 +193,8 @@ function refreshNodeHeader(n) {
   u.name.title = u.name.textContent;
   if (u.refs) {
     const r = p.refs || [];
-    u.refs.textContent = r.join(' · ');
-    u.refs.title = r.length ? 'Reference: ' + r.join(', ') : '';
+    u.refs.textContent = refLabel(r);
+    u.refs.title = r.length ? 'Reference: ' + refLabel(r) : '';
     u.refs.hidden = r.length === 0;
   }
   if (u.kap) {

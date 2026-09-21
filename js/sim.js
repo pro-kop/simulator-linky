@@ -9,6 +9,14 @@
 //   - sklad     = buffer obalů (FIFO), kapacita v obalech; přijímá jen obaly/dávky, ne volné kusy.
 //                 Plný blokuje předchozí prvek; stroje si z něj berou obal, až ho potřebují,
 //                 temperaci/obalu ho sklad posílá sám.
+//
+// Reference: každý kus i obal nese štítek reference (REF_NONE = bez reference).
+//   - stroj s referencemi označí svůj výstup (více referencí → střídání podle podílu),
+//   - stroj bez reference a kompletace štítek převezmou ze vstupu,
+//   - kusovník platí zvlášť pro každou referenci (2 L → 1 L, 2 P → 1 P), reference se nemíchají,
+//   - obal plní pro každou referenci vlastní obal (prázdné obaly jsou ve společném poolu).
+// Bez vyplněných referencí jede všechno pod REF_NONE, tj. stejně jako dřív.
+//
 // Neaktivní prvek (checkbox) je z toku vyřazen: nic nepřijímá, nic nevysílá, netiká,
 // nepočítá se do statistik. Role (producent/konzument) se ale určuje ze všech spojů,
 // takže větev za neaktivním prvkem čeká na vstup.
@@ -35,14 +43,52 @@ function buildGraph() {
 const outsOf = (n) => G.out.get(n.id) || NO_TARGETS;
 const isProducer = (n) => n.type === 'machine' && !G.hasIn.has(n.id);
 
+// ── Množství po referencích (Map: reference → počet kusů) ──
+function bagAdd(bag, ref, n) { if (n > 0) bag.set(ref, (bag.get(ref) || 0) + n); }
+function bagSub(bag, ref, n) {
+  const v = (bag.get(ref) || 0) - n;
+  if (v > 0) bag.set(ref, v); else bag.delete(ref);
+}
+function bagTotal(bag) { let s = 0; for (const v of bag.values()) s += v; return s; }
+
+// Stroj s referencemi: kterou referenci dělá tento cyklus / obal (vyhlazené střídání podle podílu).
+function pickRef(m) {
+  const refs = m.params.refs;
+  if (m.type !== 'machine' || !refs || !refs.length) return null;
+  const plan = refShares(refs), cnt = m.rt.refCycles;
+  let total = 0;
+  for (let i = 0; i < plan.length; i++) total += cnt[i] || 0;
+  let best = 0, bestScore = -Infinity;
+  plan.forEach((r, i) => {
+    const score = r.w * (total + 1) - (cnt[i] || 0);
+    if (score > bestScore) { bestScore = score; best = i; }
+  });
+  cnt[best] = (cnt[best] || 0) + 1;
+  return plan[best].name;
+}
+// Výstupní reference: vlastní reference stroje, jinak převezme vstupní.
+function stampRef(m, inRef) {
+  const r = pickRef(m);
+  return r === null ? inRef : r;
+}
+function record(m, ref, out) {
+  if (out <= 0) return;
+  m.rt.made += out;
+  bagAdd(m.rt.madeBy, ref, out);
+}
+
 function initRt(n) {
   switch (n.type) {
     case 'machine':
     case 'kompletace':
-      n.rt = { made: 0, nextAt: Infinity, pieceBuf: 0, packQueue: [], cur: null, outBuf: 0, outPacks: [], rr: 0, blocked: false };
+      n.rt = {
+        made: 0, madeBy: new Map(), refCycles: [], nextAt: Infinity,
+        pieceBuf: new Map(), packQueue: [], cur: null, outBuf: new Map(), outPacks: [], rr: 0, blocked: false,
+      };
       break;
     case 'packing':
-      n.rt = { pool: n.params.count, filling: false, fill: 0, waiting: 0, inTemp: 0, inCons: 0, inWh: 0, rr: 0 };
+      // open: reference → počet kusů v rozplněném obalu; waiting: reference plných obalů čekajících na odvoz
+      n.rt = { pool: n.params.count, open: new Map(), waiting: [], inTemp: 0, inCons: 0, inWh: 0, rr: 0 };
       break;
     case 'tempering':
       n.rt = { occ: 0, queue: [], rr: 0, blocked: false };
@@ -73,20 +119,25 @@ function moveObal(item, to) {
   item.loc = to === 'pool' ? null : to;
 }
 
-// Naplní obal kusy; vrací počet skutečně umístěných kusů (0, když chybí prázdný obal).
-function fillPacking(pack, n) {
+const copyItem = (item, extra) => Object.assign(
+  { pcs: item.pcs, cap: item.cap, packNodeId: item.packNodeId, loc: item.loc, ref: item.ref }, extra);
+
+// Naplní obal kusy dané reference (každá reference má svůj rozplněný obal).
+// Vrací počet skutečně umístěných kusů (0, když chybí prázdný obal).
+function fillPacking(pack, n, ref) {
   const pr = pack.rt, cap = pack.params.capacity;
   let placed = 0;
   while (placed < n) {
-    if (!pr.filling) {
+    let f = pr.open.get(ref);
+    if (f === undefined) {
       if (pr.pool <= 0) break;
-      pr.pool--; pr.filling = true; pr.fill = 0;
+      pr.pool--; f = 0;
     }
-    const g = Math.min(n - placed, cap - pr.fill);
-    pr.fill += g; placed += g;
-    if (pr.fill >= cap) { pr.waiting++; pr.filling = false; pr.fill = 0; }
+    const g = Math.min(n - placed, cap - f);
+    f += g; placed += g;
+    if (f >= cap) { pr.open.delete(ref); pr.waiting.push(ref); } else pr.open.set(ref, f);
   }
-  if (pr.waiting > 0) flushPack(pack);
+  if (pr.waiting.length) flushPack(pack);
   return placed;
 }
 
@@ -96,7 +147,7 @@ function sendPack(t, item) {
     case 'tempering': {
       if (t.rt.occ >= t.params.maxObals) return false;
       t.rt.occ++;
-      const it = { pcs: item.pcs, cap: item.cap, packNodeId: item.packNodeId, loc: item.loc, readyAt: S.sim.t + t.params.hoursMin * 3600 };
+      const it = copyItem(item, { readyAt: S.sim.t + t.params.hoursMin * 3600 });
       moveObal(it, 'temp');
       t.rt.queue.push(it);
       return true;
@@ -104,9 +155,9 @@ function sendPack(t, item) {
     case 'machine':
     case 'kompletace':
       if (item.packNodeId == null) {
-        t.rt.pieceBuf += item.pcs;          // volná dávka bez obalu
+        bagAdd(t.rt.pieceBuf, item.ref, item.pcs);     // volná dávka bez obalu
       } else {
-        const it = { pcs: item.pcs, cap: item.cap, packNodeId: item.packNodeId, loc: item.loc, out: 0 };
+        const it = copyItem(item, { out: 0 });
         moveObal(it, 'cons');
         t.rt.packQueue.push(it);
       }
@@ -114,14 +165,14 @@ function sendPack(t, item) {
       return true;
     case 'warehouse': {
       if (t.rt.items.length >= t.params.capacity) return false;
-      const it = { pcs: item.pcs, cap: item.cap, packNodeId: item.packNodeId, loc: item.loc };
+      const it = copyItem(item);
       moveObal(it, 'wh');
       t.rt.items.push(it);
       t.rt.inTotal++;
       return true;
     }
     case 'packing': {
-      const got = fillPacking(t, item.pcs);   // přebalení (z temperace)
+      const got = fillPacking(t, item.pcs, item.ref);   // přebalení (z temperace/skladu)
       item.pcs -= got;
       if (item.pcs > 0) return false;
       moveObal(item, 'pool');
@@ -134,78 +185,84 @@ function sendPack(t, item) {
 // Plné obaly čekající u „Obalu" pošle navazujícím prvkům (round-robin).
 function flushPack(pack) {
   const pr = pack.rt;
-  if (pr.waiting <= 0) return;
+  if (!pr.waiting.length) return;
   const targets = outsOf(pack).filter((t) => t.type !== 'packing');
   if (!targets.length) return;               // konec linky: plné obaly zůstávají, pool se vyčerpá
+  const cap = pack.params.capacity;
   let guard = 0;
-  while (pr.waiting > 0 && guard++ < 10000) {
+  while (pr.waiting.length && guard++ < 10000) {
     let sent = false;
     for (const t of rotated(targets, pr.rr)) {
-      if (pr.waiting <= 0) break;
-      const item = { pcs: pack.params.capacity, cap: pack.params.capacity, packNodeId: pack.id, loc: null };
-      if (sendPack(t, item)) { pr.waiting--; sent = true; spawnDot(pack, t); }
+      if (!pr.waiting.length) break;
+      const item = { pcs: cap, cap, packNodeId: pack.id, loc: null, ref: pr.waiting[0] };
+      if (sendPack(t, item)) { pr.waiting.shift(); sent = true; spawnDot(pack, t); }
     }
     pr.rr = (pr.rr + 1) % targets.length;
     if (!sent) break;
   }
 }
 
-// Kolik volných kusů přijme prvek t (hromadně). Dávky do temperace se sbírají v `lots`.
-function acceptPieces(t, n, lots) {
+// Kolik volných kusů dané reference přijme prvek t. Dávky do temperace se sbírají v `lots`.
+function acceptPieces(t, n, ref, lots) {
   switch (t.type) {
     case 'machine':
     case 'kompletace':
-      t.rt.pieceBuf += n; wake(t);
+      bagAdd(t.rt.pieceBuf, ref, n); wake(t);
       return n;
     case 'packing':
-      return fillPacking(t, n);
-    case 'tempering':
-      if (lots.has(t)) { lots.set(t, lots.get(t) + n); return n; }
-      if (t.rt.occ < t.params.maxObals) { t.rt.occ++; lots.set(t, n); return n; }
+      return fillPacking(t, n, ref);
+    case 'tempering': {
+      const key = t.id + '|' + ref;
+      const lot = lots.get(key);
+      if (lot) { lot.pcs += n; return n; }
+      if (t.rt.occ < t.params.maxObals) { t.rt.occ++; lots.set(key, { t, ref, pcs: n }); return n; }
       return 0;
+    }
   }
   return 0;
 }
 
-// Rozdělí volné kusy mezi navazující prvky rovnoměrně (celé kusy, round-robin).
-// Vrací počet kusů, které nikdo nepřijal (zdroj je pak blokovaný).
-function routePieces(from, pieces) {
+// Rozdělí volné kusy (bag) mezi navazující prvky rovnoměrně, každou referenci zvlášť.
+// Co nikdo nepřijme, zůstane v bagu (zdroj je pak blokovaný).
+function routePieces(from, bag) {
   const all = outsOf(from);
   const targets = all.filter((t) => t.type !== 'warehouse');   // sklad přijímá jen obaly
-  if (!targets.length) return all.length ? pieces : 0;         // jen sklad → blokace; nic → konec linky
+  if (!targets.length) { if (!all.length) bag.clear(); return; } // nic → konec linky; jen sklad → blokace
   const lots = new Map(), hit = new Set();
-  let left = pieces, active = rotated(targets, from.rt.rr), guard = 0;
-  while (left > 0 && active.length && guard++ < 1000) {
-    const share = Math.max(1, Math.floor(left / active.length));
-    const next = [];
-    for (const t of active) {
-      if (left <= 0) break;
-      const want = Math.min(share, left);
-      const got = acceptPieces(t, want, lots);
-      left -= got;
-      if (got > 0) hit.add(t);
-      if (got === want) next.push(t);
+  for (const [ref, n0] of [...bag]) {
+    let left = n0, active = rotated(targets, from.rt.rr), guard = 0;
+    while (left > 0 && active.length && guard++ < 1000) {
+      const share = Math.max(1, Math.floor(left / active.length));
+      const next = [];
+      for (const t of active) {
+        if (left <= 0) break;
+        const want = Math.min(share, left);
+        const got = acceptPieces(t, want, ref, lots);
+        left -= got;
+        if (got > 0) hit.add(t);
+        if (got === want) next.push(t);
+      }
+      active = next;
     }
-    active = next;
+    if (left > 0) bag.set(ref, left); else bag.delete(ref);
   }
-  for (const [temp, pcs] of lots) {
-    temp.rt.queue.push({ pcs, cap: pcs, packNodeId: null, loc: null, readyAt: S.sim.t + temp.params.hoursMin * 3600 });
+  for (const lot of lots.values()) {
+    lot.t.rt.queue.push({ pcs: lot.pcs, cap: lot.pcs, packNodeId: null, loc: null, ref: lot.ref, readyAt: S.sim.t + lot.t.params.hoursMin * 3600 });
   }
   from.rt.rr = (from.rt.rr + 1) % targets.length;
   hit.forEach((t) => spawnDot(from, t));
-  return left;
 }
 
 // Konzument si ze skladu na vstupu vezme další obal, až nemá co zpracovávat.
 function pullWarehouse(m, need) {
   const rt = m.rt, srcs = G.whIn.get(m.id);
-  if (!srcs || rt.cur || rt.packQueue.length || rt.pieceBuf >= need) return;
+  if (!srcs || rt.cur || rt.packQueue.length || bagTotal(rt.pieceBuf) >= need) return;
   for (const w of rotated(srcs, rt.rr)) {
     if (!w.rt.items.length) continue;
     const item = w.rt.items.shift();
     w.rt.outTotal++;
     if (item.packNodeId == null) {
-      rt.pieceBuf += item.pcs;           // dávka bez obalu (např. z temperace)
+      bagAdd(rt.pieceBuf, item.ref, item.pcs);   // dávka bez obalu (např. z temperace)
     } else {
       item.out = 0;
       moveObal(item, 'cons');
@@ -226,7 +283,7 @@ function flushOutputs(m) {
   while (rt.outPacks.length) {
     const item = rt.outPacks[0];
     const targets = packTargets(m);
-    if (!targets.length) { moveObal(item, 'pool'); rt.outBuf += item.pcs; rt.outPacks.shift(); continue; }
+    if (!targets.length) { moveObal(item, 'pool'); bagAdd(rt.outBuf, item.ref, item.pcs); rt.outPacks.shift(); continue; }
     let ok = false;
     for (const t of rotated(targets, rt.rr)) {
       if (sendPack(t, item)) { ok = true; spawnDot(m, t); rt.rr = (rt.rr + 1) % targets.length; break; }
@@ -234,17 +291,17 @@ function flushOutputs(m) {
     if (!ok) break;
     rt.outPacks.shift();
   }
-  if (rt.outBuf > 0) rt.outBuf = routePieces(m, rt.outBuf);
-  return rt.outBuf === 0 && rt.outPacks.length === 0;
+  if (rt.outBuf.size) routePieces(m, rt.outBuf);
+  return rt.outBuf.size === 0 && rt.outPacks.length === 0;
 }
 
 // Dokončený obal u konzumenta: pokračuje s výrobky do temperace/skladu, nebo se vrací do poolu.
 function finishPack(m, c) {
   if (c.packNodeId != null && hasPackDown(m)) {
-    m.rt.outPacks.push({ pcs: c.out, cap: c.out, packNodeId: c.packNodeId, loc: c.loc });
+    m.rt.outPacks.push({ pcs: c.out, cap: c.out, packNodeId: c.packNodeId, loc: c.loc, ref: c.outRef });
   } else {
     moveObal(c, 'pool');
-    m.rt.outBuf += c.out;
+    bagAdd(m.rt.outBuf, c.outRef, c.out);
   }
 }
 
@@ -257,11 +314,19 @@ function tickProducer(m) {
   if (!flushOutputs(m)) { rt.blocked = true; rt.nextAt = Math.max(rt.nextAt, now); return; }
   let guard = 0;
   while (rt.nextAt <= now && guard++ < 5000) {
-    rt.made += p.nasob;
-    rt.outBuf += p.nasob;
+    const ref = stampRef(m, REF_NONE);
+    record(m, ref, p.nasob);
+    bagAdd(rt.outBuf, ref, p.nasob);
     rt.nextAt += effT;
     if (!flushOutputs(m)) { rt.blocked = true; rt.nextAt = Math.max(rt.nextAt, now); break; }
   }
+}
+
+// Reference připravená ke zpracování z volných kusů: ta s největší zásobou (aspoň 1 výstup).
+function readyRef(bag, kus) {
+  let best = null, bestN = 0;
+  for (const [ref, n] of bag) if (n >= kus && n > bestN) { best = ref; bestN = n; }
+  return best;
 }
 
 function tickConsumer(m) {
@@ -274,27 +339,31 @@ function tickConsumer(m) {
     return;
   }
   pullWarehouse(m, need);
-  if (rt.nextAt === Infinity && (rt.cur || rt.packQueue.length || rt.pieceBuf >= kus)) rt.nextAt = now;
+  if (rt.nextAt === Infinity && (rt.cur || rt.packQueue.length || readyRef(rt.pieceBuf, kus) !== null)) rt.nextAt = now;
   let guard = 0;
   while (rt.nextAt <= now && guard++ < 5000) {
-    if (!rt.cur && rt.packQueue.length && rt.pieceBuf < need) rt.cur = rt.packQueue.shift();
+    if (!rt.cur && rt.packQueue.length && bagTotal(rt.pieceBuf) < need) {
+      rt.cur = rt.packQueue.shift();
+      rt.cur.outRef = stampRef(m, rt.cur.ref);    // obal je vždy jedné reference
+    }
     if (rt.cur && rt.cur.pcs <= 0) { const c = rt.cur; rt.cur = null; finishPack(m, c); continue; }
     if (rt.cur) {
       const c = rt.cur, consume = Math.min(need, c.pcs), out = Math.floor(consume / kus);
       c.pcs -= consume;
-      rt.pieceBuf += consume - out * kus;       // zbytek do kusovníku se nepropadne
-      rt.made += out;
-      if (c.packNodeId != null && hasPackDown(m)) c.out += out; else rt.outBuf += out;
+      bagAdd(rt.pieceBuf, c.ref, consume - out * kus);   // zbytek do kusovníku se nepropadne
+      record(m, c.outRef, out);
+      if (c.packNodeId != null && hasPackDown(m)) c.out += out; else bagAdd(rt.outBuf, c.outRef, out);
       rt.nextAt += effT;
       if (c.pcs <= 0) { rt.cur = null; finishPack(m, c); }
-    } else if (rt.pieceBuf >= kus) {
-      const take = Math.min(need, Math.floor(rt.pieceBuf / kus) * kus), out = take / kus;
-      rt.pieceBuf -= take;
-      rt.made += out; rt.outBuf += out;
-      rt.nextAt += effT;
     } else {
-      rt.nextAt = Infinity;
-      break;
+      const ref = readyRef(rt.pieceBuf, kus);
+      if (ref === null) { rt.nextAt = Infinity; break; }
+      const take = Math.min(need, Math.floor(rt.pieceBuf.get(ref) / kus) * kus), out = take / kus;
+      bagSub(rt.pieceBuf, ref, take);
+      const oref = stampRef(m, ref);
+      record(m, oref, out);
+      bagAdd(rt.outBuf, oref, out);
+      rt.nextAt += effT;
     }
     if (!flushOutputs(m)) { rt.blocked = true; rt.nextAt = Math.max(rt.nextAt, now); break; }
     pullWarehouse(m, need);
@@ -356,6 +425,8 @@ function tick() {
 }
 
 // ── Zobrazení stavu ──
+const bagText = (bag) => [...bag].map(([r, n]) => refName(r) + ' ' + fmt(n)).join(', ');
+
 function updateUI() {
   const now = S.sim.t, simH = now / 3600;
   $('clock').textContent = '⏱ ' + fmtT(now);
@@ -363,29 +434,37 @@ function updateUI() {
   for (const n of S.nodes) {
     if (!n.rt || !n.ui) continue;
     const rt = n.rt, u = n.ui;
-    let main = '–', sec = '', pct = 0, st = 'idle', label;
+    let main = '–', sec = '', pct = 0, st = 'idle', label, tip = '';
     if (isMT(n)) {
       main = fmt(rt.made) + ' ks';
+      if (rt.madeBy.size > 1 || (rt.madeBy.size === 1 && !rt.madeBy.has(REF_NONE))) tip = 'Vyrobeno: ' + bagText(rt.madeBy);
       if (isProducer(n)) {
         const pk = outsOf(n).find((x) => x.type === 'packing');
-        if (pk) { sec = 'obal: ' + fmt(pk.rt.fill) + '/' + fmt(pk.params.capacity); pct = pk.rt.fill / pk.params.capacity; }
+        if (pk) {
+          const f = Math.max(0, ...pk.rt.open.values());
+          sec = 'obal: ' + fmt(f) + '/' + fmt(pk.params.capacity);
+          pct = f / pk.params.capacity;
+        }
         st = rt.blocked ? 'block' : 'run';
       } else {
-        const q = rt.packQueue.length;
+        const q = rt.packQueue.length, pb = bagTotal(rt.pieceBuf);
         if (rt.cur) { sec = 'v obalu: ' + fmt(rt.cur.pcs) + ' | fronta: ' + q; pct = rt.cur.cap > 0 ? rt.cur.pcs / rt.cur.cap : 0; }
-        else if (rt.pieceBuf > 0) sec = 'buf: ' + fmt(rt.pieceBuf) + ' | fronta: ' + q;
+        else if (pb > 0) sec = 'buf: ' + fmt(pb) + ' | fronta: ' + q;
         else sec = 'čeká | fronta: ' + q;
         st = rt.blocked ? 'block' : (rt.nextAt !== Infinity ? 'run' : 'wait');
       }
       // Volné kusy mají za strojem jen sklad → sklad je nepřijme (bere jen obaly).
       const outs = outsOf(n);
-      if (rt.blocked && rt.outBuf > 0 && outs.length && outs.every((t) => t.type === 'warehouse')) label = 'sklad bere jen obaly';
+      if (rt.blocked && rt.outBuf.size && outs.length && outs.every((t) => t.type === 'warehouse')) label = 'sklad bere jen obaly';
     } else if (n.type === 'packing') {
-      const cap = n.params.capacity;
-      main = rt.filling ? fmt(rt.fill) + ' / ' + fmt(cap) + ' ks' : 'čeká: ' + rt.waiting;
+      const cap = n.params.capacity, open = [...rt.open.values()];
+      if (open.length === 1) main = fmt(open[0]) + ' / ' + fmt(cap) + ' ks';
+      else if (open.length > 1) main = open.length + ' rozplněné obaly';
+      else main = 'čeká: ' + rt.waiting.length;
       sec = 'vol: ' + rt.pool + ' | temp: ' + rt.inTemp + ' | k: ' + rt.inCons + (rt.inWh ? ' | sk: ' + rt.inWh : '');
-      pct = rt.filling ? rt.fill / cap : 0;
-      if (rt.filling) st = 'run';
+      pct = open.length ? Math.max(...open) / cap : 0;
+      if (rt.open.size > 1 || (rt.open.size === 1 && !rt.open.has(REF_NONE))) tip = 'Rozplněno: ' + bagText(rt.open);
+      if (open.length) st = 'run';
       else if (rt.pool <= 0) { st = 'wait'; label = 'bez prázdných obalů'; }
     } else if (n.type === 'tempering') {
       const mx = n.params.maxObals;
@@ -408,6 +487,7 @@ function updateUI() {
     }
     if (!n.active) { st = 'off'; label = undefined; }
     u.main.textContent = main;
+    u.main.title = tip;
     u.sec.textContent = sec;
     u.fill.style.width = clamp(pct * 100, 0, 100) + '%';
     setStatus(n, st, label);
@@ -427,6 +507,7 @@ function updateUI() {
   }
 
   updateStats(producers, simH);
+  updateRefStats(simH);
   updateWarnings(producers);
 }
 
@@ -451,6 +532,27 @@ function updateStats(producers, simH) {
   } else {
     $('sv-takt').textContent = '—';
   }
+}
+
+// Vyrobeno podle reference – výstup kapacitně relevantních prvků ze simulace.
+// Zobrazí se jen tehdy, když se v toku reference opravdu objevují.
+function updateRefStats(simH) {
+  const box = $('refStats');
+  const sum = new Map();
+  for (const n of S.nodes) {
+    if (n.active && n.rt && isMT(n) && n.params.kapRelevant) for (const [r, v] of n.rt.madeBy) bagAdd(sum, r, v);
+  }
+  if (!sum.size || (sum.size === 1 && sum.has(REF_NONE))) { box.hidden = true; return; }
+  const refs = [...sum.keys()].sort((a, b) => (a === REF_NONE) - (b === REF_NONE) || a.localeCompare(b, 'cs'));
+  const chips = refs.map((r) => {
+    const v = sum.get(r);
+    return h('span', { class: 'rchip' }, [
+      h('b', { text: refName(r) }),
+      fmt(v) + ' ks' + (simH > 0.01 ? ' · ' + fmt(v / simH) + ' ks/h' : ''),
+    ]);
+  });
+  box.replaceChildren(h('span', { class: 'rlbl', text: 'Vyrobeno podle reference (★ kap., simulace):' }), ...chips);
+  box.hidden = false;
 }
 
 function showWarning(text, level) {
@@ -501,6 +603,7 @@ function resetDisplay() {
   for (const n of S.nodes) {
     if (!n.ui || !n.ui.main) continue;
     n.ui.main.textContent = '–';
+    n.ui.main.title = '';
     n.ui.sec.textContent = '';
     n.ui.fill.style.width = '0%';
     n.ui.bn.hidden = true;
@@ -509,5 +612,6 @@ function resetDisplay() {
   clearDots();
   showWarning(null);
   STAT_IDS.forEach((id) => { $(id).textContent = '—'; });
+  $('refStats').hidden = true;
 }
 function resetSim() { stopSim(); resetAllRt(); resetDisplay(); }

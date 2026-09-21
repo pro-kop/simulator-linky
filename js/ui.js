@@ -225,21 +225,43 @@ function fieldRow(f, value) {
       break;
     }
     case 'refs': {
+      // Řádek = název reference + podíl v %. Prázdný podíl = rovným dílem ze zbytku do 100 %.
       const list = h('div', { class: 'refs', id });
+      const rows = [];
+      const lastFilled = () => { const r = rows[rows.length - 1]; return !r || r.name.value.trim() !== ''; };
       const add = (v) => {
-        const i = list.children.length + 1;
-        const inp = h('input', { type: 'text', maxlength: f.max, autocomplete: 'off', placeholder: 'Reference ' + i, 'aria-label': 'Reference ' + i });
-        inp.value = v || '';
-        inp.addEventListener('input', () => {
-          const last = list.lastElementChild;
-          if (last && last.value.trim() && list.children.length < f.maxItems) add('');
-        });
-        list.append(inp);
+        const i = rows.length + 1;
+        const name = h('input', { type: 'text', maxlength: f.max, autocomplete: 'off', placeholder: 'Reference ' + i, 'aria-label': 'Reference ' + i });
+        const share = h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: 'auto %', 'aria-label': 'Podíl reference ' + i + ' v %' });
+        name.value = (v && v.name) || '';
+        share.value = v && v.share != null ? String(v.share) : '';
+        name.addEventListener('input', () => { if (lastFilled() && rows.length < f.maxItems) add(null); });
+        rows.push({ name, share });
+        list.append(h('div', { class: 'ref-row' }, [name, share]));
       };
       (value || []).forEach((v) => add(v));
-      if (list.children.length < f.maxItems && (!list.lastElementChild || list.lastElementChild.value.trim())) add('');
-      control = list;
-      read = () => ({ value: [...list.children].map((i) => i.value.trim().slice(0, f.max)).filter(Boolean).slice(0, f.maxItems) });
+      if (rows.length < f.maxItems && lastFilled()) add(null);
+      control = h('div', {}, [list, h('div', { class: 'pf-note', text: 'Prázdný podíl = zbytek do 100 % rovným dílem.' })]);
+      read = () => {
+        const out = [];
+        for (const r of rows) {
+          const nm = r.name.value.trim().slice(0, f.max);
+          if (!nm) continue;
+          const raw = r.share.value.trim().replace(',', '.').replace('%', '').trim();
+          let share = null;
+          if (raw !== '') {
+            share = Number(raw);
+            if (!Number.isFinite(share) || share < 0 || share > 100) return { error: 'Podíl „' + nm + '“ zadejte jako číslo 0 – 100 %.' };
+          }
+          out.push({ name: nm, share });
+        }
+        const fixed = out.filter((r) => r.share != null), sum = fixed.reduce((s, r) => s + r.share, 0);
+        if (sum > 100.001) return { error: 'Součet podílů je ' + fmtNum(sum) + ' % – nesmí přesáhnout 100 %.' };
+        if (out.length > 1 && fixed.length === out.length && Math.abs(sum - 100) > 0.001) {
+          return { error: 'Součet podílů je ' + fmtNum(sum) + ' % – musí být 100 % (nebo nechte některý prázdný).' };
+        }
+        return { value: out.slice(0, f.maxItems) };
+      };
       break;
     }
   }
