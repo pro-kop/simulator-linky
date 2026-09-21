@@ -91,15 +91,33 @@ function initRt(n) {
       n.rt = { pool: n.params.count, open: new Map(), waiting: [], inTemp: 0, inCons: 0, inWh: 0, rr: 0 };
       break;
     case 'tempering':
-      n.rt = { occ: 0, occBy: new Map(), queue: [], rr: 0, blocked: false };
+      n.rt = { occ: 0, occBy: new Map(), queue: [], rr: 0, blocked: false, occStat: newOccStat() };
       break;
     case 'warehouse':
-      n.rt = { items: [], inTotal: 0, outTotal: 0, rr: 0 };
+      n.rt = { items: [], inTotal: 0, outTotal: 0, rr: 0, occStat: newOccStat() };
       break;
     default:
       n.rt = null;
   }
 }
+// ── Statistika obsazení (Temperace, Sklad) ──
+// Obsazení v obalech se vzorkuje každý tick: maximum a průměr vážený časem
+// (průměr = ∫ obsazení dt / doba simulace), celkem i po referencích.
+function newOccStat() { return { t: 0, sumTot: 0, maxTot: 0, sum: new Map(), max: new Map() }; }
+function sampleOcc(n, dt) {
+  const s = n.rt.occStat;
+  const counts = n.type === 'tempering' ? n.rt.occBy : countBy(n.rt.items, (i) => i.ref);
+  let tot = 0;
+  for (const [ref, v] of counts) {
+    tot += v;
+    s.sum.set(ref, (s.sum.get(ref) || 0) + v * dt);
+    if (v > (s.max.get(ref) || 0)) s.max.set(ref, v);
+  }
+  s.t += dt;
+  s.sumTot += tot * dt;
+  if (tot > s.maxTot) s.maxTot = tot;
+}
+
 function resetAllRt() { S.nodes.forEach(initRt); }
 
 function wake(m) { if (m.rt.nextAt === Infinity) m.rt.nextAt = S.sim.t; }
@@ -459,7 +477,8 @@ function tickWarehouse(w) {
 
 function tick() {
   try {
-    S.sim.t += Number($('spd').value) * TICK_MS / 1000;
+    const dt = Number($('spd').value) * TICK_MS / 1000;
+    S.sim.t += dt;
     buildGraph();
     const act = S.nodes.filter((n) => n.active && n.rt);
     act.filter((n) => n.type === 'tempering').forEach(tickTempering);
@@ -467,6 +486,7 @@ function tick() {
     act.filter((n) => n.type === 'warehouse').forEach(tickWarehouse);
     act.filter(isProducer).forEach(tickProducer);
     act.filter((n) => isMT(n) && !isProducer(n)).forEach(tickConsumer);
+    act.filter((n) => n.type === 'tempering' || n.type === 'warehouse').forEach((n) => sampleOcc(n, dt));
     updateUI();
   } catch (err) {
     stopSim();

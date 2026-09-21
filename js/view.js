@@ -361,6 +361,17 @@ function tooltipContent(n) {
       if (!items.length) out.push(ttEmpty(isT ? 'prázdná' : 'prázdný'));
       for (const ref of sortRefs(c.keys())) out.push(row(ttRef(ref), c.get(ref), null, (i) => i.ref === ref, refColor(ref)));
     }
+    // Maximum a časově vážený průměr obsazení od startu simulace
+    const os = rt.occStat;
+    if (os && os.t > 0) {
+      out.push(ttSec('Obsazení od startu (obalů)'));
+      const stat = (mx, sum) => 'max ' + fmt(mx) + ' · ø ' + fmtNum(Math.round(sum / os.t * 10) / 10);
+      out.push(ttRow(h('span', { class: 'tt-strong', text: 'Celkem' }), stat(os.maxTot, os.sumTot)));
+      const refs = sortRefs(os.max.keys());
+      if (refs.length > 1 || (refs.length === 1 && refs[0] !== REF_NONE)) {
+        for (const ref of refs) out.push(ttRow(ttRef(ref), stat(os.max.get(ref), os.sum.get(ref) || 0), null, null, 'tt-indent'));
+      }
+    }
   } else {
     return null;
   }

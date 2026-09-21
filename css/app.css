@@ -331,6 +331,7 @@ button { cursor: pointer; }
 .tt-row b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
 .tt-row .tt-bar { grid-column: 1 / -1; height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
 .tt-row .tt-bar i { display: block; height: 100%; background: var(--tcat, var(--accent-solid)); border-radius: 2px; }
+.tt-strong { color: var(--text-primary); font-weight: 600; }
 .tt-indent { padding-left: 12px; font-size: 11px; }
 .tt-empty { font-size: 11px; color: var(--text-muted); font-style: italic; }
 
